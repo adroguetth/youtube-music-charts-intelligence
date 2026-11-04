@@ -35,7 +35,7 @@ Requirements
 ------------
 - Python 3.7+
 - `requests` library installed.
-- Environment variable `MODEL_API_KEY` set with a valid Meta API key.
+- Environment variable `META_API_KEY` set with a valid Meta API key.
 
 Notes
 -----
@@ -219,7 +219,7 @@ def search_muse_fallback(
     if artist in _MUSE_CACHE:
         return _MUSE_CACHE[artist]
 
-    api_key = os.getenv("MODEL_API_KEY")
+    api_key = os.getenv("META_API_KEY")
     if not api_key:
         logger.debug("Muse (Meta) API key not set")
         return None, None, "Muse not available"
