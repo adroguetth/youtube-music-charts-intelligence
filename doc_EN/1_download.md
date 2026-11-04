@@ -503,6 +503,7 @@ jobs:
 - name: 📦 Install dependencies
   run: |
     pip install -r requirements.txt
+    python -m playwright install --dry-run chromium
     python -m playwright install chromium
     python -m playwright install-deps
 ```
@@ -536,8 +537,19 @@ jobs:
     git config user.name "github-actions[bot]"
     git config user.email "github-actions[bot]@users.noreply.github.com"
     git add charts_archive/1_download-chart/
-    git commit -m "📊 YouTube Chart Update $(date '+%Y-%m-%d') [Automated]" || echo "No changes"
-    git push
+    
+    DATE=$(date +'%Y-%m-%d')
+    WEEK=$(python3 -c "from datetime import datetime; y,w,_ = datetime.now().isocalendar(); print(f'{y}-W{w:02d}')")
+    
+    if git diff --cached --quiet; then
+      echo "🔭 No changes to commit"
+    else
+      git commit -m "🤖 YouTube Chart Update ${DATE} (Week ${WEEK}) [Automated]"
+      echo "⬇️ Pulling latest changes with rebase..."
+      git pull --rebase --autostash origin main || true
+      echo "⬆️ Pushing changes..."
+      git push origin HEAD:main
+    fi
 ```
 
 #### **7. 📋 Final Report**
@@ -547,7 +559,11 @@ jobs:
   run: |
     echo "=========================================="
     echo "✅ YouTube Charts Download Complete!"
-    echo "📅 Week: $(python scripts/1_download.py --get-week)"
+    
+    # Calculate ISO Week identifier (YYYY-WXX) using Python inline
+    WEEK_ID=$(python3 -c "from datetime import datetime; y,w,_ = datetime.now().isocalendar(); print(f'{y}-W{w:02d}')")
+    
+    echo "📅 Week: $WEEK_ID"
     echo "=========================================="
 ```
 
