@@ -601,8 +601,8 @@ This workflow runs **only** on:
 #### 1. **Clone the Repository**
 
 ```bash
-git clone https://github.com/adroguetth/Music-Charts-Intelligence.git
-cd Music-Charts-Intelligence
+git clone https://github.com/adroguetth/youtube-music-charts-intelligence.git
+cd youtube-music-charts-intelligence
 ```
 
 #### 2. **Create Virtual Environment (recommended)**
@@ -679,7 +679,7 @@ charts_archive/
 ### Adjustable Parameters in Script
 
 ```python
-# In 1_download.py
+# In scripts/1_download.py
 RETENTION_DAYS = 7      # Days to keep backups (line ~550)
 RETENTION_WEEKS = 52    # Weeks to keep databases (line ~580)
 TIMEOUT = 120000        # Browser timeout in milliseconds
@@ -701,17 +701,19 @@ timeout-minutes: 30     # Job timeout
 
 ### Common Issues and Solutions
 
-| Error                                       | Likely Cause              | Solution                                    |
-| :------------------------------------------ | :------------------------ | :------------------------------------------ |
-| `Playwright browsers not installed`         | Missing Chromium          | `python -m playwright install chromium`     |
-| `Timeout waiting for download button`       | YouTube interface changed | Check screenshot artifact, update selectors |
-| `CSV has 0 rows`                            | Download failed           | Check network, use fallback mode            |
-| `Database locked`                           | Concurrent access         | Wait or restart, check backup exists        |
-| `ImportError: No module named 'playwright'` | Missing package           | `pip install playwright`                    |
+| Error                                                     | Likely Cause              | Solution                                               |
+| :-------------------------------------------------------- | :------------------------ | :----------------------------------------------------- |
+| `Playwright browsers not installed`                       | Missing Chromium          | `python -m playwright install chromium`                |
+| `Playwright does not support chromium on ubuntu26.04-x64` | Outdated Playwright       | Ensure `playwright>=1.61.0` in `requirements.txt`      |
+| `[Errno 2] No such file or directory`                     | Wrong folder name         | Ensure script is in `scripts/` (plural), not `script/` |
+| `Timeout waiting for download button`                     | YouTube interface changed | Check screenshot artifact, update selectors            |
+| `CSV has 0 rows`                                          | Download failed           | Check network, use fallback mode                       |
+| `Database locked`                                         | Concurrent access         | Wait or restart, check backup exists                   |
+| `ImportError: No module named 'playwright'`               | Missing package           | `pip install playwright`                               |
 
 ### Debugging with Screenshots
 
-When the download button cannot be found, the workflow automatically uploads a screenshot as an artifact. Download it from GitHub Actions → Artifacts → `screenshot-failure`.
+When the workflow fails, it automatically uploads an artifact named `chart-debug-<run_number>` containing the logs and generated files. Download it from GitHub Actions → Artifacts → `chart-debug-<run_number>`.
 
 ------
 
@@ -745,7 +747,7 @@ When the download button cannot be found, the workflow automatically uploads a s
   - 🌐 **Web portfolio:** [adroguett-portfolio.cl](https://www.adroguett-portfolio.cl/)
   - 📧 **Email:** adroguett.consultor@gmail.com
 - **Dependencies**:
-  - Playwright (Apache 2.0)
+  - Playwright (Apache 2.0) - *Requires `>=1.61.0`*
   - Pandas (BSD 3-Clause)
   - NumPy (BSD)
 
