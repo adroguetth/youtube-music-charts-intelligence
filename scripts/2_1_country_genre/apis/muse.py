@@ -1,5 +1,5 @@
 """
-Muse Spark (Meta) API Client - Deep Fallback Country and Genre Detection
+Muse Spark (Meta AI) API Client - Deep Fallback Country and Genre Detection
 ============================================================================
 Final-fallback detection module for musical artist metadata. Uses direct
 HTTP requests to the Meta API `/v1/responses` endpoint with the
@@ -259,7 +259,12 @@ def search_muse_fallback(
             json=payload,
             timeout=_REQUEST_TIMEOUT_SECONDS,
         )
-        response.raise_for_status()
+        
+        # --- Log the real error if the request fails ---
+        if response.status_code != 200:
+            logger.error(f"Muse API error for {artist}: {response.status_code} - {response.text[:300]}")
+            _MUSE_CACHE[artist] = (None, None, f"Muse HTTP {response.status_code}")
+            return None, None, f"Muse HTTP {response.status_code}"
 
         response_data = response.json()
 
