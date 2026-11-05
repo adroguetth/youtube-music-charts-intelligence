@@ -57,6 +57,7 @@ Notes
   beyond building the reverse index once at import time.
 
 Author: Alfonso Droguett
+Repository: https://github.com/adroguetth/youtube-music-charts-intelligence 
 Email: adroguett.consultor@gmail.com
 """
 
