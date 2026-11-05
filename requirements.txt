@@ -7,13 +7,9 @@ pandas==2.2.3
 # ============================================================
 # Script 2.1: Artist Country + Genre Detection (Modular)
 # ============================================================
-# (Uses Python standard library only: sqlite3, pathlib, re, datetime, collections)
-# No external dependencies required for the modular version.
-# The original monolithic version required these, but the modular one does not:
-#   - requests (already included below for other scripts)
-#   - openai (for DeepSeek fallback - optional)
-#   - beautifulsoup4 (not needed in modular version)
-#   - lxml (not needed in modular version)
+requests==2.32.3
+openai==1.61.1
+groq>=0.12.0
 
 # ============================================================
 # Script 2.2: Song Catalog Builder
@@ -29,7 +25,6 @@ isodate==0.7.2
 yt-dlp
 selenium==4.27.1
 webdriver-manager==4.0.2
-requests==2.32.3
 
 # ============================================================
 # Script 4: Notebook Generator (Jupyter + Visualizations)
@@ -42,25 +37,20 @@ seaborn==0.13.2
 squarify==0.4.4
 scipy==1.15.2
 numpy==2.2.4
-pandas==2.2.3
 
 # ============================================================
 # Script 5: Export to PDF + Google Drive
 # ============================================================
 # PDF conversion (Playwright-based webpdf, no LaTeX needed)
-playwright>=1.61.0  # Already installed for Script 1
+# playwright>=1.61.0  <-- Ya instalado en el Script 1, no lo repitas aquí.
 
 # Google Drive API
-google-api-python-client==2.149.0
 google-auth-httplib2==0.2.0
 google-auth-oauthlib==1.2.1
 
 # ============================================================
 # Shared / Optional
 # ============================================================
-# DeepSeek API client (used by Script 2.1 modular and Script 4)
-openai==1.61.1
-
 # For potential future enhancements
 # tqdm==4.67.1  # Progress bars (optional)
 # pytest==8.3.5  # Testing (optional)
