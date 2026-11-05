@@ -57,7 +57,6 @@ Notes
   beyond building the reverse index once at import time.
 
 Author: Alfonso Droguett
-Repository: https://github.com/adroguetth/Chilean-Presidential-Elections-2025-Analysis
 Email: adroguett.consultor@gmail.com
 """
 
