@@ -40,7 +40,7 @@ Notes
 - Backups are retained for 7 days; databases are retained for 52 weeks.
 
 Author: Alfonso Droguett
-Repository: https://github.com/adroguetth/Chilean-Presidential-Elections-2025-Analysis
+Repository: https://github.com/adroguetth/youtube-music-charts-intelligence 
 Email: adroguett.consultor@gmail.com
 """
 
