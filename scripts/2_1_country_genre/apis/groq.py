@@ -212,9 +212,10 @@ def search_groq_fallback(
     prompt = _build_prompt(artist, context_country)
 
     try:
-        # --- Call the model via the official Groq SDK (Llama 3.3 70B) ---
+        # --- Call the model via the official Groq SDK ---
+        # Se cambió a "llama3-70b-8192" para evitar el 404 Not Found del modelo versatile
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama3-70b-8192",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
             max_tokens=200,
