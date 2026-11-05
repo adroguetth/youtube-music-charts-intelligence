@@ -47,7 +47,7 @@ Notes
   API surface; only `base_url` differs.
 
 Author: Alfonso Droguett
-Repository: https://github.com/adroguetth/Chilean-Presidential-Elections-2025-Analysis
+Repository: https://github.com/adroguetth/youtube-music-charts-intelligence 
 Email: adroguett.consultor@gmail.com
 """
 
