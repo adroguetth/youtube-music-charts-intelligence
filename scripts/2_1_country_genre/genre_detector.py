@@ -138,7 +138,7 @@ Notes
   a real concern. Do not refactor to `Decimal` without measuring.
 
 Author: Alfonso Droguett
-Repository: https://github.com/adroguetth/Chilean-Presidential-Elections-2025-Analysis
+Repository: https://github.com/adroguetth/youtube-music-charts-intelligence 
 Email: adroguett.consultor@gmail.com
 """
 
