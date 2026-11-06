@@ -11,7 +11,7 @@ The module has two distinct responsibilities:
 1. **Resolution** (`search_artist_genre`): gathers genre candidates from
    structured sources (MusicBrainz → Wikidata → Wikipedia) and, when they
    yield too few candidates, falls back to AI sources in increasing cost
-   order (DeepSeek → Groq → Muse Spark) and finally to the country
+   order (DeepSeek → GPT-OSS → Qwen → Muse Spark) and finally to the country
    priority list.
 2. **Voting** (`select_primary_genre`): combines candidate votes with
    source-based multipliers, scene-specific term bonuses, country priority
@@ -50,7 +50,7 @@ Dependencies
 - Internal: `.config` (logger), `.utils.text_utils`
   (generate_all_variations, detect_script_from_name, normalize_text),
   `.apis.musicbrainz`, `.apis.wikidata`, `.apis.wikipedia`,
-  `.apis.deepseek`, `.apis.groq`, `.apis.muse`,
+  `.apis.deepseek`, `.apis.gpt_oss`, `.apis.qwen`, `.apis.muse`,
   `.dictionaries.genres` (GENRE_MAPPINGS),
   `.dictionaries.macro_genres` (MACRO_GENRES, GENERIC_MACROS),
   `.dictionaries.country_rules` (COUNTRY_GENRE_PRIORITY,
@@ -81,61 +81,11 @@ Notes
   and scene bonuses are **multiplicative**; country priority boosts are
   **multiplicative**; `force_macro` remapping moves a vote to a different
   macro **at a multiplied weight**.
-- **`force_macro` semantics are destructive**: when a candidate's
-  subgenre matches a rule keyword and `force_macro` is set, the candidate's
-  current macro is **popped** from `macro_votes` and its weight
-  (multiplied by `bonus_extra`) is added to the `force_macro` target. If
-  multiple candidates match, the last one wins for that macro's weight
-  (subsequent pops get `KeyError`-safe via `macro_votes.pop(macro, None)`
-  semantics — see the actual code).
-- **Country priority multipliers depend on list position**: rank 1 ×2.0,
-  rank 2 ×1.5, any other position ×1.2. This makes the first entry in
-  `COUNTRY_GENRE_PRIORITY[country]` twice as likely to win as a neutral
-  candidate, which is why ordering in that dictionary is semantic.
-- **Script bonus is conditional on country agreement**: a `ko` script
-  only boosts `K-Pop/K-Rock` if the resolved country is South Korea. This
-  prevents mis-boosting a Korean-script name that resolves to, e.g.,
-  Japan.
-- **`MIN_CANDIDATES = 3` gates Wikipedia fallback**: Wikipedia is only
-  queried when structured sources yield fewer than 3 candidates. This is
-  a **soft threshold** — it reduces network cost when MusicBrainz/Wikidata
-  already provide enough signal, but it means the voting system may run
-  with fewer candidates than ideal when only structured sources are
-  available.
-- **Wikipedia fallback is two-pass**: first the country-priority languages
-  (or detected-script + English when country is unknown), then a fixed
-  fallback list (`es, pt, fr, de, it, ru, ar, zh, ja, ko`). Both passes
-  stop early once `MIN_CANDIDATES` is reached.
-- **AI fallbacks return raw genre strings, not macro-genres**: the module
-  attempts to normalize them via `normalize_genre` and, if the result is a
-  known macro, returns that. If normalization fails (unknown raw genre),
-  the **raw string is returned as-is** with a `(raw: ...)` suffix in the
-  source. This preserves information for later manual inspection rather
-  than silently dropping the AI result.
 - **AI fallbacks are only invoked when `all_candidates` is empty**: unlike
   `country_detector` which chains AI fallbacks unconditionally, this
-  module skips AI when structured sources returned **any** candidates,
-  even if fewer than `MIN_CANDIDATES`. The voting system tolerates sparse
-  input; extra AI calls would add cost without proportionally improving
-  accuracy.
+  module skips AI when structured sources returned **any** candidates.
 - **Country fallback is last**: when no candidates are found but a country
-  is known, the top entry of `COUNTRY_GENRE_PRIORITY[country]` (or
-  `DEFAULT_GENRE_PRIORITY = ["Pop"]`) is returned with source
-  `"Genre: country fallback (CountryName)"`. This guarantees a non-None
-  genre for any artist with a known country.
-- **Return contract of `search_artist_genre`**: `(genre, source)` where
-  `genre` is a macro-genre (or a raw string when AI returned an unmappable
-  label, or `None` when nothing resolved), and `source` describes the
-  winning path (`"Genre: MusicBrainz, Wikidata"`, `"DeepSeek API (genre:
-  reggaeton)"`, `"Genre: country fallback (Chile)"`, or
-  `"Genre not found"`).
-- **No side effects on import**: all caching happens inside the per-source
-  clients and inside `config._CACHE`. This module only reads from the
-  cache and orchestrates calls.
-- **The voting system is not numerically stable**: adding many small votes
-  can accumulate floating-point rounding error. In practice, weights are
-  small (1–10 range) and candidate counts are low (< 50), so this is not
-  a real concern. Do not refactor to `Decimal` without measuring.
+  is known, the top entry of `COUNTRY_GENRE_PRIORITY[country]` is returned.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence 
@@ -147,9 +97,10 @@ from collections import defaultdict
 from typing import List, Optional, Tuple
 
 from .apis.deepseek import search_deepseek_fallback
-from .apis.groq import search_groq_fallback
-from .apis.musicbrainz import search_musicbrainz_genre_cached
+from .apis.gpt_oss import search_gpt_oss_fallback
+from .apis.qwen import search_qwen_fallback
 from .apis.muse import search_muse_fallback
+from .apis.musicbrainz import search_musicbrainz_genre_cached
 from .apis.wikidata import search_wikidata_genre_cached
 from .apis.wikipedia import (
     search_wikipedia_infobox_genre_cached,
@@ -181,16 +132,12 @@ _MUSICBRAINZ_RATE_LIMIT_SECONDS = 0.5
 _WIKIDATA_RATE_LIMIT_SECONDS = 0.5
 _WIKIPEDIA_RATE_LIMIT_SECONDS = 0.3
 
-# Source-based multipliers applied to base candidate weights during voting.
 _SOURCE_MULTIPLIERS = {
     "musicbrainz": 1.5,
     "wikidata": 1.3,
     "infobox": 1.2,
 }
 
-# Scene-specific bonuses. Each entry maps a set of subgenre keywords to a
-# multiplier and (optionally) an override macro.
-# Format: (keywords, multiplier, override_macro_or_None)
 _SCENE_BONUSES = [
     (
         ["reggaeton", "reggaetón", "regueton", "reguetón", "trap latino",
@@ -235,7 +182,6 @@ _SCENE_BONUSES = [
     ),
 ]
 
-# Country → priority Wikipedia languages for genre lookup.
 _COUNTRY_LANG_MAP = {
     "India": ["hi", "ta", "te", "ml", "kn", "gu", "or", "bn", "en"],
     "Pakistan": ["ur", "en"],
@@ -259,14 +205,9 @@ _COUNTRY_LANG_MAP = {
     "Israel": ["he", "en"],
 }
 
-# Fixed fallback language list used when the country has no entry in
-# `_COUNTRY_LANG_MAP`.
 _OTHER_LANGUAGES = ["es", "pt", "fr", "de", "it", "ru", "ar", "zh", "ja", "ko"]
 
-# Script/country pairs that trigger a small boost on the corresponding
-# macro-genre when both agree.
 _SCRIPT_COUNTRY_BOOSTS = [
-    # (script_code, allowed_countries, macro, multiplier)
     (["hi", "ta", "te", "ml", "kn", "gu", "or", "bn"],
      ["India", "Pakistan", "Bangladesh"],
      ["Indian Pop", "Pakistani Pop", "Bangladeshi Pop/Rock"],
@@ -283,8 +224,6 @@ _SCRIPT_COUNTRY_BOOSTS = [
     (["kk"], ["Kazakhstan"], ["Q-pop/Q-rock"], 1.2),
 ]
 
-# Priority ranks in COUNTRY_GENRE_PRIORITY that trigger a multiplier.
-# Rank is 0-indexed; any rank beyond the mapping gets the default.
 _COUNTRY_PRIORITY_MULTIPLIERS = {0: 2.0, 1: 1.5}
 _COUNTRY_PRIORITY_DEFAULT_MULTIPLIER = 1.2
 
@@ -295,62 +234,23 @@ _COUNTRY_PRIORITY_DEFAULT_MULTIPLIER = 1.2
 def normalize_genre(genre_text: str) -> Tuple[Optional[str], Optional[str]]:
     """
     Normalize a raw genre string to `(macro_genre, subgenre)`.
-
-    Applies a cascade of matching strategies:
-
-    1. Stopword rejection (`GENRE_STOPWORDS`).
-    2. Direct lookup in `GENRE_MAPPINGS`.
-    3. Substring match against the longest mapping keys first.
-    4. Hyphen → space and space → hyphen variants.
-
-    Parameters
-    ----------
-    genre_text : str
-        Raw genre string from a source (any casing, punctuation, accents).
-
-    Returns
-    -------
-    tuple of (str or None, str or None)
-        `(macro_genre, subgenre)` on success, `(None, None)` otherwise.
-        Falsy input yields `(None, None)`.
-
-    Notes
-    -----
-    - **This is the public normalization entry point** consumed by every
-      AI client (imported locally inside the fallback modules to avoid a
-      circular import) and by the voting logic.
-    - Substring matching sorts `GENRE_MAPPINGS.keys()` by length on
-      **every call**, which is O(n log n) with n ≈ 5,000. This is not
-      cached. If call volume grows, precompute the sorted list once at
-      module load.
-    - Substring matches require `len(genre_variant) > 3` to avoid false
-      positives from short mappings.
-    - Hyphen/space variants are only tried **after** the substring pass,
-      so a canonical hyphenated key wins over a space-variant substring
-      match.
-    - Input is normalized via `normalize_text` (lowercase, punctuation
-      stripped, whitespace collapsed) before any lookup.
     """
     if not genre_text:
         return None, None
 
     text_norm = normalize_text(genre_text)
 
-    # --- Stopword rejection ---
     if text_norm in GENRE_STOPWORDS:
         return None, None
 
-    # --- Direct lookup ---
     if text_norm in GENRE_MAPPINGS:
         return GENRE_MAPPINGS[text_norm]
 
-    # --- Substring match (longest first to prefer specific mappings) ---
     sorted_mappings = sorted(GENRE_MAPPINGS.keys(), key=len, reverse=True)
     for genre_variant in sorted_mappings:
         if genre_variant in text_norm and len(genre_variant) > 3:
             return GENRE_MAPPINGS[genre_variant]
 
-    # --- Hyphen/space variants ---
     text_no_hyphen = text_norm.replace("-", " ")
     if text_no_hyphen != text_norm and text_no_hyphen in GENRE_MAPPINGS:
         return GENRE_MAPPINGS[text_no_hyphen]
@@ -366,25 +266,6 @@ def normalize_genre(genre_text: str) -> Tuple[Optional[str], Optional[str]]:
 # WEIGHTED VOTING
 # ============================================================================
 def _apply_source_multipliers(subgenre: str, source: str, weight: float) -> float:
-    """
-    Apply source-based multipliers to a candidate's base weight.
-
-    Parameters
-    ----------
-    subgenre : str
-        Raw subgenre string (unused; kept for signature symmetry with
-        other helpers).
-    source : str
-        Source tag from the candidate tuple (e.g., `"musicbrainz_genres"`,
-        `"wikidata"`, `"wikipedia_en_infobox"`).
-    weight : float
-        Base weight.
-
-    Returns
-    -------
-    float
-        Weight after applying all matching source multipliers.
-    """
     for source_key, multiplier in _SOURCE_MULTIPLIERS.items():
         if source_key in source:
             weight *= multiplier
@@ -394,22 +275,6 @@ def _apply_source_multipliers(subgenre: str, source: str, weight: float) -> floa
 def _apply_scene_bonuses(
     subgenre: str, weight: float
 ) -> Tuple[float, Optional[str]]:
-    """
-    Apply scene-specific term bonuses and optional macro override.
-
-    Parameters
-    ----------
-    subgenre : str
-        Raw subgenre string.
-    weight : float
-        Weight after source multipliers.
-
-    Returns
-    -------
-    tuple of (float, str or None)
-        `(adjusted_weight, override_macro)`. `override_macro` is None when
-        no scene matched or the scene has no override.
-    """
     sub_lower = subgenre.lower()
     override = None
 
@@ -418,8 +283,6 @@ def _apply_scene_bonuses(
             weight *= multiplier
             if override_macro:
                 override = override_macro
-            # Only the first matching scene applies its multiplier; later
-            # scenes are ignored to avoid stacking bonuses on one candidate.
             break
 
     return weight, override
@@ -431,55 +294,11 @@ def select_primary_genre(
     country: Optional[str] = None,
     detected_lang: Optional[str] = None,
 ) -> Optional[str]:
-    """
-    Select the primary macro-genre via weighted voting.
-
-    Combines candidate votes with source multipliers, scene bonuses,
-    country priority boosts, country-specific rules, and script-aware
-    bonuses, then returns the highest-scoring macro-genre.
-
-    Parameters
-    ----------
-    artist : str
-        Artist name (used only for logging context; unused in voting).
-    genre_candidates : list of (str, int, str)
-        Candidates as `(subgenre, weight, source)` tuples, in the order
-        they were gathered.
-    country : str, optional
-        Resolved country of origin, used for priority and rule lookups.
-    detected_lang : str, optional
-        ISO 639-1 code detected from the artist name's script.
-
-    Returns
-    -------
-    str or None
-        Winning macro-genre, or None if no candidate produced a vote.
-
-    Notes
-    -----
-    - **Additive and multiplicative**: base weights are summed; source
-      multipliers, scene bonuses, and country priority boosts are
-      applied multiplicatively per candidate.
-    - **`force_macro` is destructive**: when a rule with `force_macro`
-      fires, the candidate's current macro is popped from `macro_votes`
-      and its weight × `bonus_extra` is added to the `force_macro`
-      target. See module `Notes`.
-    - **Country priority multipliers depend on list position**: rank 1
-      ×2.0, rank 2 ×1.5, others ×1.2.
-    - **Script bonus requires country agreement**: a script code only
-      boosts the matching macro if the country also matches the
-      `_SCRIPT_COUNTRY_BOOSTS` pair.
-    - **Generic-to-regional mapping is applied before priority boosts**,
-      so a remapped vote participates in subsequent country priority
-      calculations.
-    - If `macro_votes` is empty at the end, returns None.
-    """
     if not genre_candidates:
         return None
 
     macro_votes: defaultdict[str, float] = defaultdict(float)
 
-    # --- Phase 1: accumulate weighted votes per macro ---
     for subgenre, weight, source in genre_candidates:
         macro, _ = normalize_genre(subgenre)
 
@@ -494,14 +313,11 @@ def select_primary_genre(
                 macro = override
             macro_votes[macro] += final_weight
         else:
-            # Fallback: treat the raw string as a macro if it matches one
-            # exactly (case-insensitive).
             for known_macro in MACRO_GENRES:
                 if subgenre.lower() == known_macro.lower():
                     macro_votes[known_macro] += float(weight)
                     break
 
-    # --- Phase 2: remap generic macros to regional ones (country rule) ---
     if country and country in COUNTRY_SPECIFIC_RULES:
         rule = COUNTRY_SPECIFIC_RULES[country]
         map_to = rule.get("map_generic_to")
@@ -511,7 +327,6 @@ def select_primary_genre(
                 if macro and macro in GENERIC_MACROS:
                     macro_votes[map_to] += float(weight)
 
-    # --- Phase 3: country priority boosts (rank-based) ---
     if country and macro_votes:
         priority = COUNTRY_GENRE_PRIORITY.get(country, DEFAULT_GENRE_PRIORITY)
         for macro in list(macro_votes.keys()):
@@ -522,7 +337,6 @@ def select_primary_genre(
                 )
                 macro_votes[macro] *= multiplier
 
-    # --- Phase 4: country-specific keyword / force rules ---
     if country and macro_votes and country in COUNTRY_SPECIFIC_RULES:
         rule = COUNTRY_SPECIFIC_RULES[country]
         for macro in list(macro_votes.keys()):
@@ -540,7 +354,6 @@ def select_primary_genre(
                         macro_votes[macro] *= rule["bonus_extra"]
                     break
 
-    # --- Phase 5: script + country bonus ---
     if detected_lang and country:
         for scripts, countries, macros, multiplier in _SCRIPT_COUNTRY_BOOSTS:
             if detected_lang in scripts and country in countries:
@@ -548,7 +361,6 @@ def select_primary_genre(
                     if m in macro_votes:
                         macro_votes[m] *= multiplier
 
-    # --- Phase 6: select winner ---
     if macro_votes:
         return max(macro_votes.items(), key=lambda x: x[1])[0]
 
@@ -563,33 +375,6 @@ def _collect_wikipedia_candidates(
     priority_langs: List[str],
     all_candidates: List[Tuple[str, int, str]],
 ) -> None:
-    """
-    Query Wikipedia in priority languages and extend `all_candidates`.
-
-    Stops early once `_MIN_CANDIDATES` candidates have been gathered
-    across the whole list.
-
-    Parameters
-    ----------
-    variations : list of str
-        Name variations to try (only the first is used).
-    priority_langs : list of str
-        Language codes to try, in order.
-    all_candidates : list of tuple
-        Accumulator list (mutated in place).
-
-    Returns
-    -------
-    None
-        `all_candidates` is extended in place.
-
-    Notes
-    -----
-    - Only `variations[:1]` is used here; broader variation coverage is
-      handled by the caller for structured sources.
-    - For each language: try infobox first, then summary if infobox
-      yielded nothing. Sleep between languages.
-    """
     for var in variations[:_MAX_VARIATIONS_WIKIPEDIA]:
         for lang in priority_langs:
             candidates = search_wikipedia_infobox_genre_cached(var, lang)
@@ -613,30 +398,6 @@ def _try_ai_fallback(
     fallback_fn,
     source_label: str,
 ) -> Optional[Tuple[str, str]]:
-    """
-    Invoke a single AI fallback and normalize its result.
-
-    Parameters
-    ----------
-    artist : str
-        Artist name.
-    country : str, optional
-        Context country passed to the fallback model.
-    fallback_name : str
-        Human-readable name for logging (e.g., `"DeepSeek"`).
-    fallback_fn : callable
-        The fallback function (`search_deepseek_fallback`, etc.).
-    source_label : str
-        Label used in the returned source string
-        (e.g., `"DeepSeek API"`).
-
-    Returns
-    -------
-    tuple of (str, str) or None
-        `(genre, source)` on success, where `genre` is either a macro (if
-        normalization succeeded) or the raw string (with `(raw: ...)`
-        suffix in source). None when the fallback returned no genre.
-    """
     logger.debug(
         f"  🔍 Using {fallback_name} fallback for genre: {artist} "
         f"(country: {country})"
@@ -662,56 +423,6 @@ def _try_ai_fallback(
 def search_artist_genre(
     artist: str, country: Optional[str] = None
 ) -> Tuple[Optional[str], str]:
-    """
-    Determine the primary genre for an artist using multiple sources.
-
-    Search order:
-
-    1. MusicBrainz (up to 2 variations).
-    2. Wikidata (up to 2 variations), only if MusicBrainz yielded nothing.
-    3. Wikipedia in priority languages (infobox, then summary), until
-       `_MIN_CANDIDATES` candidates are gathered.
-    4. DeepSeek API fallback.
-    5. Groq API fallback.
-    6. Muse Spark API fallback.
-    7. Country priority fallback (`COUNTRY_GENRE_PRIORITY`).
-    8. Weighted voting via `select_primary_genre`.
-
-    Parameters
-    ----------
-    artist : str
-        Artist name to search for.
-    country : str, optional
-        Known country to improve accuracy (passed to AI fallbacks as
-        context, and used for country priority/rule lookups).
-
-    Returns
-    -------
-    tuple of (str or None, str)
-        `(genre, source)` where:
-        - `genre` is a macro-genre, a raw AI-provided string (when
-          normalization failed), or None.
-        - `source` describes the winning path (e.g.,
-          `"Genre: MusicBrainz, Wikidata"`,
-          `"DeepSeek API (genre: reggaeton)"`,
-          `"Genre: country fallback (Chile)"`, or `"Genre not found"`).
-
-    Notes
-    -----
-    - **AI fallbacks are only invoked when `all_candidates` is empty**:
-      unlike `country_detector`, this module does not chain AI fallbacks
-      when structured sources produced *any* candidates, even if fewer
-      than `_MIN_CANDIDATES`. The voting system tolerates sparse input.
-    - **AI fallbacks use local imports** to avoid the circular
-      `api_clients → genre_detector → apis` chain. Do not hoist to module
-      level.
-    - **Country fallback is last**: guarantees a non-None genre for any
-      artist with a known country (`DEFAULT_GENRE_PRIORITY = ["Pop"]` when
-      the country has no priority list).
-    - **Source attribution reflects the winning path**, not the set of
-      sources that contributed votes (except for the voting path, where
-      the source set is joined with `", "`).
-    """
     all_candidates: List[Tuple[str, int, str]] = []
     variations = generate_all_variations(artist)
     detected_lang = detect_script_from_name(artist)
@@ -724,7 +435,7 @@ def search_artist_genre(
             break
         time.sleep(_MUSICBRAINZ_RATE_LIMIT_SECONDS)
 
-    # --- 2. Wikidata (only if MusicBrainz yielded nothing) ---
+    # --- 2. Wikidata ---
     if not all_candidates:
         for var in variations[:_MAX_VARIATIONS_STRUCTURED]:
             candidates = search_wikidata_genre_cached(var)
@@ -733,7 +444,7 @@ def search_artist_genre(
                 break
             time.sleep(_WIKIDATA_RATE_LIMIT_SECONDS)
 
-    # --- 3. Wikipedia in priority languages ---
+    # --- 3. Wikipedia ---
     priority_langs: List[str] = []
     if country:
         priority_langs.extend(
@@ -759,7 +470,7 @@ def search_artist_genre(
             variations, other_langs, all_candidates
         )
 
-    # --- 4-6. AI fallbacks (only when no candidates at all) ---
+    # --- 4-7. AI fallbacks ---
     if not all_candidates:
         result = _try_ai_fallback(
             artist,
@@ -774,9 +485,19 @@ def search_artist_genre(
         result = _try_ai_fallback(
             artist,
             country,
-            "Groq",
-            search_groq_fallback,
-            "Groq API",
+            "GPT-OSS",
+            search_gpt_oss_fallback,
+            "GPT-OSS API",
+        )
+        if result:
+            return result
+
+        result = _try_ai_fallback(
+            artist,
+            country,
+            "Qwen",
+            search_qwen_fallback,
+            "Qwen API",
         )
         if result:
             return result
@@ -791,7 +512,7 @@ def search_artist_genre(
         if result:
             return result
 
-    # --- 7. Country priority fallback ---
+    # --- 8. Country priority fallback ---
     if not all_candidates and country:
         priority = COUNTRY_GENRE_PRIORITY.get(
             country, DEFAULT_GENRE_PRIORITY
@@ -799,7 +520,7 @@ def search_artist_genre(
         if priority:
             return priority[0], f"Genre: country fallback ({country})"
 
-    # --- 8. Weighted voting ---
+    # --- 9. Weighted voting ---
     if all_candidates:
         primary_genre = select_primary_genre(
             artist, all_candidates, country, detected_lang
