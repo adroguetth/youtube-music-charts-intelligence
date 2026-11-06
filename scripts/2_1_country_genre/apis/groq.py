@@ -213,15 +213,17 @@ def search_groq_fallback(
 
     try:
         # --- Call the model via the official Groq SDK ---
-        # Se cambió a "llama3-70b-8192" para evitar el 404 Not Found del modelo versatile
         response = client.chat.completions.create(
-            model="llama3-70b-8192",
+            model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
             max_tokens=200,
         )
 
         content = response.choices[0].message.content.strip()
+        
+        # Log the raw response so we can debug in GitHub Actions
+        logger.info(f"  🤖 Groq raw response for {artist}: {content[:100]}...")
 
         # --- Extract and parse JSON from the response ---
         json_match = re.search(r"\{[^{}]*\}", content)
@@ -247,9 +249,10 @@ def search_groq_fallback(
             return result
 
     except json.JSONDecodeError as e:
-        logger.debug(f"Groq JSON parse error for {artist}: {e}")
+        logger.error(f"  ❌ Groq JSON parse error for {artist}: {e}")
     except Exception as e:
-        logger.debug(f"Groq API error for {artist}: {e}")
+        # Changed to logger.error so the exact Groq API error shows up in the workflow log
+        logger.error(f"  ❌ Groq API error for {artist}: {e}")
 
     result = (None, None, "Groq failed")
     _GROQ_CACHE[artist] = result
