@@ -4,8 +4,8 @@ Country Detector - Multi-Source Artist Country Resolution
 Orchestration module for resolving an artist's country of origin. Implements
 the layered fallback cascade that drives the country half of the metadata
 enrichment pipeline: structured sources first (MusicBrainz → Wikidata →
-Wikipedia), then AI fallbacks in increasing cost order (DeepSeek → Groq →
-Muse Spark).
+Wikipedia), then AI fallbacks in increasing cost order (DeepSeek → GPT-OSS →
+Qwen → Muse Spark).
 
 The module itself contains no per-source logic — that lives in the
 `apis.*` clients. Its only responsibility is **ordering, iteration over
@@ -23,8 +23,8 @@ Features
   - Wikipedia other languages: 2 variations per language.
 - Script-aware Wikipedia fallback: the detected script's language edition
   is tried first, followed by a fixed priority list of common editions.
-- Layered AI fallback (DeepSeek → Groq → Muse Spark) invoked only when all
-  structured sources miss.
+- Layered AI fallback (DeepSeek → GPT-OSS → Qwen → Muse Spark) invoked only
+  when all structured sources miss.
 - Explicit rate limiting between source families (`time.sleep`) and per
   language iteration for Wikipedia.
 - Source attribution: the returned source string records both the winning
@@ -35,8 +35,8 @@ Dependencies
 ------------
 - Internal: `.config` (logger), `.utils.text_utils`
   (generate_all_variations, detect_script_from_name), `.apis.musicbrainz`,
-  `.apis.wikidata`, `.apis.wikipedia`, `.apis.deepseek`, `.apis.groq`,
-  `.apis.muse`.
+  `.apis.wikidata`, `.apis.wikipedia`, `.apis.deepseek`, `.apis.gpt_oss`,
+  `.apis.qwen`, `.apis.muse`.
 - External: time, typing (stdlib).
 
 Requirements
@@ -66,7 +66,7 @@ Notes
   sources and `variations[:2]` for non-English Wikipedia. Without caps,
   a name with 15 variations × 12 languages would trigger 180 Wikipedia
   requests per artist. The caps bound the worst case to
-  `3 + 3 + 3×2 + 12×2 = 36` structured requests plus up to 3 AI calls.
+  `3 + 3 + 3×2 + 12×2 = 36` structured requests plus up to 4 AI calls.
 - **The winning source string includes the variation only when it differs
   from the original**: if `var == artist`, the info suffix is empty. This
   keeps the common case (`"MusicBrainz"`) clean while preserving
@@ -78,27 +78,13 @@ Notes
 - **Non-English language priority order**: detected script language first
   (via `detect_script_from_name`), then a fixed list
   `['es', 'pt', 'fr', 'de', 'it', 'hi', 'ko', 'ja', 'zh', 'ar', 'tr', 'ru']`.
-  The fixed list reflects typical chart demographics in the target
-  dataset (Chilean/Latin American charts, with broad coverage of major
-  music markets). Adjusting this list is a data-driven decision, not a
-  code-quality one.
-- **AI fallbacks are not variation-aware**: DeepSeek, Groq, and Muse
-  Spark are called with the **original** artist name only. Variations are
-  a typographic-matching tool for exact-match sources; AI models already
-  handle minor spelling differences natively. Sending variations to the
-  AIs would multiply cost without meaningful benefit.
+- **AI fallbacks are not variation-aware**: DeepSeek, GPT-OSS, Qwen, and 
+  Muse Spark are called with the **original** artist name only. 
 - **AI fallbacks are not chained on partial results**: if DeepSeek
-  returns a country, the pipeline short-circuits and Groq/Muse are not
-  called. This is intentional — once we have a country, additional AI
-  calls add cost without improving confidence.
+  returns a country, the pipeline short-circuits and the other AIs are not
+  called.
 - **Return contract**: `(country, source)` where `country` is `None` when
-  no source matched and `source` is `"Not found"` in that case. Callers
-  should treat `country is None` as "unresolved" and can log the source
-  string for diagnostics.
-- **Idempotent and side-effect-free within the process**: no global state
-  is mutated by this module. All caching happens inside the per-source
-  clients. The only observable side effect is network I/O and the
-  corresponding cache writes in `config._CACHE`.
+  no source matched and `source` is `"Not found"` in that case.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -109,9 +95,10 @@ import time
 from typing import Optional, Tuple
 
 from .apis.deepseek import search_deepseek_fallback
-from .apis.groq import search_groq_fallback
-from .apis.musicbrainz import search_musicbrainz_country_cached
+from .apis.gpt_oss import search_gpt_oss_fallback
+from .apis.qwen import search_qwen_fallback
 from .apis.muse import search_muse_fallback
+from .apis.musicbrainz import search_musicbrainz_country_cached
 from .apis.wikidata import search_wikidata_country_cached
 from .apis.wikipedia import (
     search_wikipedia_infobox_country_cached,
@@ -131,20 +118,9 @@ _WIKIPEDIA_EN_RATE_LIMIT_SECONDS = 0.3
 _WIKIPEDIA_OTHER_RATE_LIMIT_SECONDS = 0.2
 
 # Default language priority for non-English Wikipedia lookups.
-# The detected script's language (if any) is prepended at runtime.
 _PRIORITY_LANGUAGES = [
-    "es",
-    "pt",
-    "fr",
-    "de",
-    "it",
-    "hi",
-    "ko",
-    "ja",
-    "zh",
-    "ar",
-    "tr",
-    "ru",
+    "es", "pt", "fr", "de", "it", "hi", 
+    "ko", "ja", "zh", "ar", "tr", "ru",
 ]
 
 
@@ -162,8 +138,9 @@ def search_country(artist: str) -> Tuple[Optional[str], str]:
     3. Wikipedia EN (summary, then infobox, per variation).
     4. Wikipedia in priority languages based on script detection.
     5. DeepSeek API fallback.
-    6. Groq API fallback (Llama 3.3 70B).
-    7. Muse Spark API fallback (Meta).
+    6. GPT-OSS API fallback (via Groq).
+    7. Qwen API fallback (via Groq).
+    8. Muse Spark API fallback (Meta).
 
     The first source that returns a non-`None` country wins and the
     cascade short-circuits.
@@ -177,27 +154,8 @@ def search_country(artist: str) -> Tuple[Optional[str], str]:
     -------
     tuple of (str or None, str)
         A tuple `(country, source)` where:
-        - `country` is the canonical country name, or `None` if
-          unresolved.
-        - `source` is a human-readable description of the winning source
-          (e.g., `"MusicBrainz"`, `"MusicBrainz (var: Beyonce)"`,
-          `"Wikipedia ES"`, `"DeepSeek API"`, `"Not found"`).
-
-    Notes
-    -----
-    - **Caching is inherited from the per-source clients**, not
-      implemented here. Repeated calls for the same artist do not incur
-      duplicate network requests.
-    - **Variation caps** (`_MAX_VARIATIONS_STRUCTURED`,
-      `_MAX_VARIATIONS_WIKIPEDIA_OTHER`) bound the worst-case request
-      count. Do not raise them without understanding the cost
-      implications.
-    - **The `(var: ...)` suffix** is appended to the source string only
-      when the winning variation differs from the original artist name.
-    - **AI fallbacks use the original name only** — variations are not
-      sent to the AIs because they handle spelling variance natively.
-    - **Sleeps are coarse-grained** and tuned for MusicBrainz (1 req/s)
-      and Wikimedia burst limits. See module `Notes`.
+        - `country` is the canonical country name, or `None` if unresolved.
+        - `source` is a human-readable description of the winning source.
     """
     variations = generate_all_variations(artist)
 
@@ -236,7 +194,7 @@ def search_country(artist: str) -> Tuple[Optional[str], str]:
         priority_langs.append(detected_lang)
     priority_langs.extend(_PRIORITY_LANGUAGES)
 
-    # Deduplicate while preserving order (dict.fromkeys is O(n))
+    # Deduplicate while preserving order
     priority_langs = list(dict.fromkeys(priority_langs))
 
     for lang in priority_langs:
@@ -253,13 +211,19 @@ def search_country(artist: str) -> Tuple[Optional[str], str]:
     if deepseek_country:
         return deepseek_country, "DeepSeek API"
 
-    # --- 6. Groq fallback (Llama 3.3) ---
-    logger.debug(f"  🔍 Using Groq fallback for country: {artist}")
-    groq_country, _, _ = search_groq_fallback(artist)
-    if groq_country:
-        return groq_country, "Groq API"
+    # --- 6. GPT-OSS fallback (via Groq) ---
+    logger.debug(f"  🔍 Using GPT-OSS fallback for country: {artist}")
+    gpt_oss_country, _, _ = search_gpt_oss_fallback(artist)
+    if gpt_oss_country:
+        return gpt_oss_country, "GPT-OSS API"
 
-    # --- 7. Muse Spark fallback (Meta) ---
+    # --- 7. Qwen fallback (via Groq) ---
+    logger.debug(f"  🔍 Using Qwen fallback for country: {artist}")
+    qwen_country, _, _ = search_qwen_fallback(artist)
+    if qwen_country:
+        return qwen_country, "Qwen API"
+
+    # --- 8. Muse Spark fallback (Meta) ---
     logger.debug(f"  🔍 Using Muse Spark fallback for country: {artist}")
     muse_country, _, _ = search_muse_fallback(artist)
     if muse_country:
