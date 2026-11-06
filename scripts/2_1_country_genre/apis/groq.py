@@ -2,9 +2,9 @@
 Groq API Client - Fallback Country and Genre Detection
 ============================================================================
 Fallback detection module for musical artist metadata. Uses the official
-Groq SDK to query the Llama 3.3 70B Versatile model when other sources
-(including DeepSeek) return no results. Provides country of origin and
-primary musical genre for a given artist name.
+Groq SDK to query the GPT-OSS-120B model when other sources (including
+DeepSeek) return no results. Provides country of origin and primary
+musical genre for a given artist name.
 
 This module acts as a last-resort fallback in the metadata detection
 pipeline. It includes lazy client initialization, in-memory caching, rate
@@ -184,7 +184,7 @@ def search_groq_fallback(
         A tuple `(country, genre, source_info)` where:
         - `country` is the normalized country name, or None.
         - `genre` is the normalized macro-genre, or None.
-        - `source_info` describes the outcome (e.g., "Groq (Llama 3.3)",
+        - `source_info` describes the outcome (e.g., "Groq (GPT-OSS-120B)",
           "Groq not available", "Groq failed").
 
     Notes
@@ -213,11 +213,12 @@ def search_groq_fallback(
 
     try:
         # --- Call the model via the official Groq SDK ---
+        # Using openai/gpt-oss-120b, the replacement for Llama in the free tier
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
-            max_tokens=200,
+            max_tokens=300,
         )
 
         content = response.choices[0].message.content.strip()
@@ -244,7 +245,7 @@ def search_groq_fallback(
                 macro, _ = normalize_genre(genre_raw)
                 genre = macro if macro else genre_raw
 
-            result = (country, genre, "Groq (Llama 3.3)")
+            result = (country, genre, "Groq (GPT-OSS-120B)")
             _GROQ_CACHE[artist] = result
             return result
 
