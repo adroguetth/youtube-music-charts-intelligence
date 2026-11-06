@@ -3,8 +3,8 @@ Muse Spark (Meta AI) API Client - Deep Fallback Country and Genre Detection
 ============================================================================
 Final-fallback detection module for musical artist metadata. Uses direct
 HTTP requests to the Meta API `/v1/responses` endpoint with the
-`muse-spark-1.3-contributor` model and high reasoning effort. Provides
-country of origin and primary musical genre for a given artist name.
+`muse-spark-1.3-contributor` model. Provides country of origin and primary
+musical genre for a given artist name.
 
 This module acts as the last-resort fallback in the metadata detection
 pipeline, invoked only when all other sources (including Groq) return
@@ -15,7 +15,7 @@ returned values.
 Features
 --------
 - Direct HTTP requests to the Meta API `/v1/responses` endpoint.
-- Uses the `muse-spark-1.3-contributor` model with `reasoning_effort=high`.
+- Uses the `muse-spark-1.3-contributor` model (default reasoning).
 - In-memory cache keyed by artist name to avoid redundant API calls.
 - Automatic country validation and normalization.
 - Automatic genre normalization via the local genre detector.
@@ -42,7 +42,7 @@ Notes
 - The module-level cache is a singleton shared across calls within the
   same process.
 - Rate limiting is applied via a 0.5s sleep between calls (more
-  conservative than the Groq fallback due to `reasoning_effort=high`).
+  conservative than the Groq fallback).
 - The prompt is intentionally identical to the DeepSeek/Groq fallback
   prompts for consistency across fallback sources.
 - Failures are cached (as `(None, None, "Muse failed")` or
@@ -206,8 +206,7 @@ def search_muse_fallback(
     Notes
     -----
     - Applies a 0.5s delay before each API call as polite rate limiting.
-    - Uses direct HTTP POST to the Meta `/v1/responses` endpoint with
-      `reasoning_effort=high` and `stream=False`.
+    - Uses direct HTTP POST to the Meta `/v1/responses` endpoint.
     - Extracts the first JSON object found in the response text via regex,
       so stray text does not break parsing.
     - Country is validated and normalized via
@@ -247,7 +246,7 @@ def search_muse_fallback(
                 ],
             }
         ],
-        "reasoning_effort": "high",
+        # "reasoning_effort": "high",  
         "stream": False,
     }
 
@@ -262,7 +261,7 @@ def search_muse_fallback(
         
         # --- Log the real error if the request fails ---
         if response.status_code != 200:
-            logger.error(f"Muse API error for {artist}: {response.status_code} - {response.text[:300]}")
+            logger.error(f"  ❌ Muse API error for {artist}: {response.status_code} - {response.text[:150]}")
             _MUSE_CACHE[artist] = (None, None, f"Muse HTTP {response.status_code}")
             return None, None, f"Muse HTTP {response.status_code}"
 
@@ -272,7 +271,7 @@ def search_muse_fallback(
         content = _extract_text_from_response(response_data)
 
         if not content:
-            logger.debug(f"Muse response did not contain output text for {artist}")
+            logger.debug(f"  ❌ Muse response did not contain output text for {artist}")
             _MUSE_CACHE[artist] = (None, None, "Muse empty response")
             return None, None, "Muse empty response"
 
@@ -300,15 +299,15 @@ def search_muse_fallback(
             return result
 
         logger.debug(
-            f"Muse JSON parse failed for {artist}. Raw content: {content[:100]}..."
+            f"  ❌ Muse JSON parse failed for {artist}. Raw content: {content[:100]}..."
         )
 
     except requests.exceptions.RequestException as e:
-        logger.debug(f"Muse API connection error for {artist}: {e}")
+        logger.debug(f"  ❌ Muse API connection error for {artist}: {e}")
     except json.JSONDecodeError as e:
-        logger.debug(f"Muse JSON decode error for {artist}: {e}")
+        logger.debug(f"  ❌ Muse JSON decode error for {artist}: {e}")
     except Exception as e:
-        logger.debug(f"Muse API error for {artist}: {e}")
+        logger.debug(f"  ❌ Muse API error for {artist}: {e}")
 
     result = (None, None, "Muse failed")
     _MUSE_CACHE[artist] = result
