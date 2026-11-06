@@ -1,182 +1,3 @@
-"""
-Muse Spark (Meta AI) API Client - Deep Fallback Country and Genre Detection
-============================================================================
-Final-fallback detection module for musical artist metadata. Uses direct
-HTTP requests to the Meta API `/v1/responses` endpoint with the
-`muse-spark-1.3-contributor` model. Provides country of origin and primary
-musical genre for a given artist name.
-
-This module acts as the last-resort fallback in the metadata detection
-pipeline, invoked only when all other sources (including Groq) return
-nothing. It includes in-memory caching, rate limiting, structured response
-parsing, and robust JSON extraction with validation/normalization of
-returned values.
-
-Features
---------
-- Direct HTTP requests to the Meta API `/v1/responses` endpoint.
-- Uses the `muse-spark-1.3-contributor` model (default reasoning).
-- In-memory cache keyed by artist name to avoid redundant API calls.
-- Automatic country validation and normalization.
-- Automatic genre normalization via the local genre detector.
-- Structured parsing of the Meta API response blocks (`output` →
-  `message` → `output_text`).
-- Robust JSON extraction from model output.
-- Graceful degradation when API key is missing or calls fail.
-
-Dependencies
-------------
-- Internal: `..config` (logger), `..utils.country_utils`
-  (validate_and_normalize_country), `..genre_detector` (normalize_genre,
-  imported locally to avoid circular dependency).
-- External: requests, os, json, re, time, typing (stdlib).
-
-Requirements
-------------
-- Python 3.7+
-- `requests` library installed.
-- Environment variable `META_API_KEY` set with a valid Meta API key.
-
-Notes
------
-- The module-level cache is a singleton shared across calls within the
-  same process.
-- Rate limiting is applied via a 0.5s sleep between calls (more
-  conservative than the Groq fallback).
-- The prompt is intentionally identical to the DeepSeek/Groq fallback
-  prompts for consistency across fallback sources.
-- Failures are cached (as `(None, None, "Muse failed")` or
-  `(None, None, "Muse empty response")`) to avoid retrying the same
-  artist repeatedly.
-- The Meta response is expected to contain a list of `output` blocks; the
-  module walks `message` → `content` → `output_text` to concatenate the
-  final text.
-
-Author: Alfonso Droguett
-Repository: https://github.com/adroguetth/youtube-music-charts-intelligence 
-Email: adroguett.consultor@gmail.com
-"""
-
-import json
-import os
-import re
-import time
-from typing import Optional, Tuple
-
-import requests
-
-from ..config import logger
-from ..utils.country_utils import validate_and_normalize_country
-
-# ============================================================================
-# CONSTANTS AND GLOBAL STATE
-# ============================================================================
-_API_URL = "https://api.meta.ai/v1/responses"
-_MODEL_NAME = "muse-spark-1.3-contributor"
-_REQUEST_TIMEOUT_SECONDS = 30
-_RATE_LIMIT_SECONDS = 0.5
-
-_MUSE_CACHE = {}  # Cache: {artist: (country, genre, source)}
-
-
-# ============================================================================
-# PROMPT BUILDING
-# ============================================================================
-def _build_prompt(artist: str, context_country: Optional[str] = None) -> str:
-    """
-    Build the prompt sent to the Muse Spark model.
-
-    Parameters
-    ----------
-    artist : str
-        Artist name to query.
-    context_country : str, optional
-        Known country used as context to assist the model.
-
-    Returns
-    -------
-    str
-        Formatted prompt requesting a JSON object with `country` and
-        `genre` fields.
-
-    Notes
-    -----
-    The prompt is intentionally identical to the DeepSeek/Groq fallback
-    prompts for consistency across fallback sources.
-    """
-    if context_country:
-        return f"""
-You are a music knowledge expert. Provide accurate information about the musical artist "{artist}".
-
-The artist is known to be from {context_country} (but please verify if correct). Return ONLY a valid JSON object with these fields (use null if unknown):
-{{
-    "country": "country of origin (full name, e.g., United States, South Korea, United Kingdom) - if the provided country is incorrect, provide the correct one, otherwise leave as provided",
-    "genre": "primary musical genre (e.g., Pop, K-Pop, Reggaeton, Afrobeats, Rock, Hip-Hop/Rap)"
-}}
-
-Be precise and factual. If you're unsure about any field, set it to null.
-Do not include any additional text outside the JSON object.
-"""
-
-    return f"""
-You are a music knowledge expert. Provide accurate information about the musical artist "{artist}".
-
-Return ONLY a valid JSON object with these fields (use null if unknown):
-{{
-    "country": "country of origin (full name, e.g., United States, South Korea, United Kingdom)",
-    "genre": "primary musical genre (e.g., Pop, K-Pop, Reggaeton, Afrobeats, Rock, Hip-Hop/Rap)"
-}}
-
-Be precise and factual. If you're unsure about any field, set it to null.
-Do not include any additional text outside the JSON object.
-"""
-
-
-# ============================================================================
-# RESPONSE PARSING
-# ============================================================================
-def _extract_text_from_response(response_data: dict) -> str:
-    """
-    Extract the concatenated output text from a Meta API response.
-
-    The Muse response is expected to contain a list of `output` blocks;
-    this helper walks `message` → `content` → `output_text` and joins all
-    text fragments.
-
-    Parameters
-    ----------
-    response_data : dict
-        Parsed JSON response from the Meta API.
-
-    Returns
-    -------
-    str
-        Concatenated output text, or an empty string if no output text
-        blocks were found.
-
-    Notes
-    -----
-    The response may contain reasoning blocks alongside the final message;
-    only `output_text` content blocks are collected.
-    """
-    content = ""
-
-    if "output" not in response_data:
-        return content
-
-    for block in response_data["output"]:
-        if block.get("type") != "message" or "content" not in block:
-            continue
-        for content_block in block["content"]:
-            if content_block.get("type") == "output_text":
-                content += content_block.get("text", "")
-
-    return content
-
-
-# ============================================================================
-# FALLBACK DETECTION
-# ============================================================================
 def search_muse_fallback(
     artist: str,
     context_country: Optional[str] = None,
@@ -246,7 +67,7 @@ def search_muse_fallback(
                 ],
             }
         ],
-        # "reasoning_effort": "high",  
+        # "reasoning_effort": "high",  <-- REMOVED: Not supported by Contributor model
         "stream": False,
     }
 
@@ -274,6 +95,10 @@ def search_muse_fallback(
             logger.debug(f"  ❌ Muse response did not contain output text for {artist}")
             _MUSE_CACHE[artist] = (None, None, "Muse empty response")
             return None, None, "Muse empty response"
+
+        # --- Log the raw response cleanly (single line) ---
+        clean_content = content.replace('\n', ' ').replace('\r', '')
+        logger.info(f"  🤖 Muse raw response for {artist}: {clean_content}")
 
         # --- Extract and parse JSON from the response text ---
         json_match = re.search(r"\{[^{}]*\}", content)
