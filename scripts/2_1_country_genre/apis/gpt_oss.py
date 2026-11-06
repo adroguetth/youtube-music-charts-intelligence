@@ -1,5 +1,5 @@
 """
-Groq API Client - Fallback Country and Genre Detection
+GPT-OSS API Client (via Groq) - Fallback Country and Genre Detection
 ============================================================================
 Fallback detection module for musical artist metadata. Uses the official
 Groq SDK to query the GPT-OSS-120B model when other sources (including
