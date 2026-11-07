@@ -1614,128 +1614,164 @@ GENRE_MAPPINGS: Dict[str, Tuple[str, str]] = {
     'alternative cumbia': ('Cumbia', 'alternative cumbia'),
 
     ###############################################################################
-    # Sertanejo (Brazil)
+    # Brazilian Regional (Sertanejo, Forró, Axé, Pagode, etc.)
     ###############################################################################
+    # NOTE: "Funk Brasileiro" is NOT included in this block.
+    # It has its own dedicated macro-genre ("Funk Brasileiro") to maintain
+    # the distinction between regional acoustic/traditional music and
+    # urban/electronic funk from Rio and São Paulo.
+
     ## General Sertanejo
-    'sertanejo': ('Sertanejo', 'sertanejo'),
-    'música sertaneja': ('Sertanejo', 'música sertaneja'),
-    'sertanejo music': ('Sertanejo', 'sertanejo music'),
-    'sertanejo brasileiro': ('Sertanejo', 'sertanejo brasileiro'),
-    'brazilian sertanejo': ('Sertanejo', 'brazilian sertanejo'),
+    'sertanejo': ('Brazilian Regional', 'sertanejo'),
+    'música sertaneja': ('Brazilian Regional', 'música sertaneja'),
+    'sertanejo music': ('Brazilian Regional', 'sertanejo music'),
+    'sertanejo brasileiro': ('Brazilian Regional', 'sertanejo brasileiro'),
+    'brazilian sertanejo': ('Brazilian Regional', 'brazilian sertanejo'),
+    'sertanejo contemporâneo': ('Brazilian Regional', 'sertanejo contemporâneo'),
 
     ## Sertanejo raiz / Traditional
-    'sertanejo raiz': ('Sertanejo', 'sertanejo raiz'),
-    'sertanejo tradicional': ('Sertanejo', 'sertanejo tradicional'),
-    'traditional sertanejo': ('Sertanejo', 'traditional sertanejo'),
-    'sertanejo de raiz': ('Sertanejo', 'sertanejo de raiz'),
-    'sertanejo raíz': ('Sertanejo', 'sertanejo raíz'),
-    'sertanejo clássico': ('Sertanejo', 'sertanejo clássico'),
-    'classic sertanejo': ('Sertanejo', 'classic sertanejo'),
-    'sertanejo antigo': ('Sertanejo', 'sertanejo antigo'),
-    'old school sertanejo': ('Sertanejo', 'old school sertanejo'),
+    'sertanejo raiz': ('Brazilian Regional', 'sertanejo raiz'),
+    'sertanejo tradicional': ('Brazilian Regional', 'sertanejo tradicional'),
+    'traditional sertanejo': ('Brazilian Regional', 'traditional sertanejo'),
+    'sertanejo de raiz': ('Brazilian Regional', 'sertanejo de raiz'),
+    'sertanejo raíz': ('Brazilian Regional', 'sertanejo raíz'),
+    'sertanejo clássico': ('Brazilian Regional', 'sertanejo clássico'),
+    'classic sertanejo': ('Brazilian Regional', 'classic sertanejo'),
+    'sertanejo antigo': ('Brazilian Regional', 'sertanejo antigo'),
+    'old school sertanejo': ('Brazilian Regional', 'old school sertanejo'),
 
     ## Sertanejo universitário
-    'sertanejo universitário': ('Sertanejo', 'sertanejo universitário'),
-    'sertanejo universitaria': ('Sertanejo', 'sertanejo universitaria'),
-    'university sertanejo': ('Sertanejo', 'university sertanejo'),
-    'sertanejo jovem': ('Sertanejo', 'sertanejo jovem'),
-    'young sertanejo': ('Sertanejo', 'young sertanejo'),
-    'sertanejo moderno': ('Sertanejo', 'sertanejo moderno'),
-    'modern sertanejo': ('Sertanejo', 'modern sertanejo'),
+    'sertanejo universitário': ('Brazilian Regional', 'sertanejo universitário'),
+    'sertanejo universitaria': ('Brazilian Regional', 'sertanejo universitaria'),
+    'university sertanejo': ('Brazilian Regional', 'university sertanejo'),
+    'sertanejo jovem': ('Brazilian Regional', 'sertanejo jovem'),
+    'young sertanejo': ('Brazilian Regional', 'young sertanejo'),
+    'sertanejo moderno': ('Brazilian Regional', 'sertanejo moderno'),
+    'modern sertanejo': ('Brazilian Regional', 'modern sertanejo'),
 
     ## Romantic sertanejo
-    'sertanejo romântico': ('Sertanejo', 'sertanejo romântico'),
-    'romantic sertanejo': ('Sertanejo', 'romantic sertanejo'),
-    'sertanejo de amor': ('Sertanejo', 'sertanejo de amor'),
-    'sertanejo apaixonado': ('Sertanejo', 'sertanejo apaixonado'),
+    'sertanejo romântico': ('Brazilian Regional', 'sertanejo romântico'),
+    'romantic sertanejo': ('Brazilian Regional', 'romantic sertanejo'),
+    'sertanejo de amor': ('Brazilian Regional', 'sertanejo de amor'),
+    'sertanejo apaixonado': ('Brazilian Regional', 'sertanejo apaixonado'),
 
-    ## Sertanejo pop
-    'sertanejo pop': ('Sertanejo', 'sertanejo pop'),
-    'pop sertanejo': ('Sertanejo', 'pop sertanejo'),
-    'sertanejo comercial': ('Sertanejo', 'sertanejo comercial'),
-    'commercial sertanejo': ('Sertanejo', 'commercial sertanejo'),
-    'sertanejo mainstream': ('Sertanejo', 'sertanejo mainstream'),
-
-    ## Arrocha
-    'arrocha': ('Sertanejo', 'arrocha'),
-    'arrocha sertanejo': ('Sertanejo', 'arrocha sertanejo'),
-    'sertanejo arrocha': ('Sertanejo', 'sertanejo arrocha'),
-    'arrocha romântico': ('Sertanejo', 'arrocha romântico'),
-
-    ## Música caipira
-    'música caipira': ('Sertanejo', 'música caipira'),
-    'caipira': ('Sertanejo', 'caipira'),
-    'musica caipira': ('Sertanejo', 'musica caipira'),
-    'caipira music': ('Sertanejo', 'caipira music'),
-    'sertanejo caipira': ('Sertanejo', 'sertanejo caipira'),
-    'moda caipira': ('Sertanejo', 'moda caipira'),
-    'moda de viola': ('Sertanejo', 'moda de viola'),
-
-    ## Sertanejo with viola
-    'sertanejo com viola': ('Sertanejo', 'sertanejo com viola'),
-    'sertanejo de viola': ('Sertanejo', 'sertanejo de viola'),
-    'viola sertaneja': ('Sertanejo', 'viola sertaneja'),
-    'sertanejo acústico': ('Sertanejo', 'sertanejo acústico'),
-    'acoustic sertanejo': ('Sertanejo', 'acoustic sertanejo'),
-    'sertanejo viola caipira': ('Sertanejo', 'sertanejo viola caipira'),
-
-    ## Sertanejo by era
-    'sertanejo 80s': ('Sertanejo', 'sertanejo 80s'),
-    'sertanejo 90s': ('Sertanejo', 'sertanejo 90s'),
-    'sertanejo 2000s': ('Sertanejo', 'sertanejo 2000s'),
-    'sertanejo 2010s': ('Sertanejo', 'sertanejo 2010s'),
-    'sertanejo 2020s': ('Sertanejo', 'sertanejo 2020s'),
-    'sertanejo atual': ('Sertanejo', 'sertanejo atual'),
-    'current sertanejo': ('Sertanejo', 'current sertanejo'),
-
-    ## Fusion sertanejo
-    'sertanejo fusion': ('Sertanejo', 'sertanejo fusion'),
-    'sertanejo fusão': ('Sertanejo', 'sertanejo fusão'),
-    'sertanejo rock': ('Sertanejo', 'sertanejo rock'),
-    'rock sertanejo': ('Sertanejo', 'rock sertanejo'),
-    'sertanejo eletrônico': ('Sertanejo', 'sertanejo eletrônico'),
-    'eletrônico sertanejo': ('Sertanejo', 'eletrônico sertanejo'),
-    'sertanejo reggae': ('Sertanejo', 'sertanejo reggae'),
-    'reggae sertanejo': ('Sertanejo', 'reggae sertanejo'),
-
-    ## Instrumental sertanejo
-    'sertanejo instrumental': ('Sertanejo', 'sertanejo instrumental'),
-    'instrumental sertanejo': ('Sertanejo', 'instrumental sertanejo'),
-
-    ## Sertanejo duos
-    'dupla sertaneja': ('Sertanejo', 'dupla sertaneja'),
-    'sertanejo dupla': ('Sertanejo', 'sertanejo dupla'),
-    'duplas sertanejas': ('Sertanejo', 'duplas sertanejas'),
-
-    ## Feminejo (female sertanejo)
-    'feminejo': ('Sertanejo', 'feminejo'),
-    'sertanejo feminino': ('Sertanejo', 'sertanejo feminino'),
-    'female sertanejo': ('Sertanejo', 'female sertanejo'),
-    'sertanejo mulheres': ('Sertanejo', 'sertanejo mulheres'),
-
-    ## Sertanejo gospel
-    'sertanejo gospel': ('Sertanejo', 'sertanejo gospel'),
-    'gospel sertanejo': ('Sertanejo', 'gospel sertanejo'),
-    'sertanejo cristão': ('Sertanejo', 'sertanejo cristão'),
-
-    ## Sertanejo universitário - subcategories
-    'sertanejo universitário antigo': ('Sertanejo', 'sertanejo universitário antigo'),
-    'sertanejo universitário novo': ('Sertanejo', 'sertanejo universitário novo'),
+    ## Sertanejo pop / Comercial
+    'sertanejo pop': ('Brazilian Regional', 'sertanejo pop'),
+    'pop sertanejo': ('Brazilian Regional', 'pop sertanejo'),
+    'sertanejo comercial': ('Brazilian Regional', 'sertanejo comercial'),
+    'commercial sertanejo': ('Brazilian Regional', 'commercial sertanejo'),
+    'sertanejo mainstream': ('Brazilian Regional', 'sertanejo mainstream'),
 
     ## Sertanejo by region
-    'sertanejo goiano': ('Sertanejo', 'sertanejo goiano'),
-    'goiano sertanejo': ('Sertanejo', 'goiano sertanejo'),
-    'sertanejo paulista': ('Sertanejo', 'sertanejo paulista'),
-    'paulista sertanejo': ('Sertanejo', 'paulista sertanejo'),
-    'sertanejo mineiro': ('Sertanejo', 'sertanejo mineiro'),
-    'mineiro sertanejo': ('Sertanejo', 'mineiro sertanejo'),
-    'sertanejo mato-grossense': ('Sertanejo', 'sertanejo mato-grossense'),
+    'sertanejo goiano': ('Brazilian Regional', 'sertanejo goiano'),
+    'goiano sertanejo': ('Brazilian Regional', 'goiano sertanejo'),
+    'sertanejo paulista': ('Brazilian Regional', 'sertanejo paulista'),
+    'paulista sertanejo': ('Brazilian Regional', 'paulista sertanejo'),
+    'sertanejo mineiro': ('Brazilian Regional', 'sertanejo mineiro'),
+    'mineiro sertanejo': ('Brazilian Regional', 'mineiro sertanejo'),
+    'sertanejo mato-grossense': ('Brazilian Regional', 'sertanejo mato-grossense'),
 
-    ## Viola caipira / Viola sertaneja
-    'viola caipira': ('Sertanejo', 'viola caipira'),
-    'viola sertaneja': ('Sertanejo', 'viola sertaneja'),
-    'violeiro': ('Sertanejo', 'violeiro'),
-    'violeiros': ('Sertanejo', 'violeiros'),
+    ## Sertanejo by era
+    'sertanejo 80s': ('Brazilian Regional', 'sertanejo 80s'),
+    'sertanejo 90s': ('Brazilian Regional', 'sertanejo 90s'),
+    'sertanejo 2000s': ('Brazilian Regional', 'sertanejo 2000s'),
+    'sertanejo 2010s': ('Brazilian Regional', 'sertanejo 2010s'),
+    'sertanejo 2020s': ('Brazilian Regional', 'sertanejo 2020s'),
+    'sertanejo atual': ('Brazilian Regional', 'sertanejo atual'),
+    'current sertanejo': ('Brazilian Regional', 'current sertanejo'),
+
+    ## Sertanejo subgenres
+    'feminejo': ('Brazilian Regional', 'feminejo'),
+    'sertanejo feminino': ('Brazilian Regional', 'sertanejo feminino'),
+    'female sertanejo': ('Brazilian Regional', 'female sertanejo'),
+    'sertanejo mulheres': ('Brazilian Regional', 'sertanejo mulheres'),
+    'sertanejo gospel': ('Brazilian Regional', 'sertanejo gospel'),
+    'gospel sertanejo': ('Brazilian Regional', 'gospel sertanejo'),
+    'sertanejo cristão': ('Brazilian Regional', 'sertanejo cristão'),
+    'sertanejo instrumental': ('Brazilian Regional', 'sertanejo instrumental'),
+    'instrumental sertanejo': ('Brazilian Regional', 'instrumental sertanejo'),
+    'dupla sertaneja': ('Brazilian Regional', 'dupla sertaneja'),
+    'sertanejo dupla': ('Brazilian Regional', 'sertanejo dupla'),
+    'duplas sertanejas': ('Brazilian Regional', 'duplas sertanejas'),
+
+    ## Música caipira / Viola
+    'música caipira': ('Brazilian Regional', 'música caipira'),
+    'caipira': ('Brazilian Regional', 'caipira'),
+    'musica caipira': ('Brazilian Regional', 'musica caipira'),
+    'caipira music': ('Brazilian Regional', 'caipira music'),
+    'sertanejo caipira': ('Brazilian Regional', 'sertanejo caipira'),
+    'moda caipira': ('Brazilian Regional', 'moda caipira'),
+    'moda de viola': ('Brazilian Regional', 'moda de viola'),
+    'sertanejo com viola': ('Brazilian Regional', 'sertanejo com viola'),
+    'sertanejo de viola': ('Brazilian Regional', 'sertanejo de viola'),
+    'viola sertaneja': ('Brazilian Regional', 'viola sertaneja'),
+    'sertanejo acústico': ('Brazilian Regional', 'sertanejo acústico'),
+    'acoustic sertanejo': ('Brazilian Regional', 'acoustic sertanejo'),
+    'sertanejo viola caipira': ('Brazilian Regional', 'sertanejo viola caipira'),
+    'viola caipira': ('Brazilian Regional', 'viola caipira'),
+    'violeiro': ('Brazilian Regional', 'violeiro'),
+    'violeiros': ('Brazilian Regional', 'violeiros'),
+
+    ## Arrocha / Pisadinha / Piseiro
+    'arrocha': ('Brazilian Regional', 'arrocha'),
+    'arrocha sertanejo': ('Brazilian Regional', 'arrocha sertanejo'),
+    'sertanejo arrocha': ('Brazilian Regional', 'sertanejo arrocha'),
+    'arrocha romântico': ('Brazilian Regional', 'arrocha romântico'),
+    'piseiro': ('Brazilian Regional', 'piseiro'),
+    'pisadinha': ('Brazilian Regional', 'pisadinha'),
+    'pisadinha baiana': ('Brazilian Regional', 'pisadinha baiana'),
+    'piseiro romântico': ('Brazilian Regional', 'piseiro romântico'),
+
+    ## Fusion sertanejo
+    'sertanejo fusion': ('Brazilian Regional', 'sertanejo fusion'),
+    'sertanejo fusão': ('Brazilian Regional', 'sertanejo fusão'),
+    'sertanejo rock': ('Brazilian Regional', 'sertanejo rock'),
+    'rock sertanejo': ('Brazilian Regional', 'rock sertanejo'),
+    'sertanejo eletrônico': ('Brazilian Regional', 'sertanejo eletrônico'),
+    'eletrônico sertanejo': ('Brazilian Regional', 'eletrônico sertanejo'),
+    'sertanejo reggae': ('Brazilian Regional', 'sertanejo reggae'),
+    'reggae sertanejo': ('Brazilian Regional', 'reggae sertanejo'),
+
+    ## Forró
+    'forro': ('Brazilian Regional', 'forro'),
+    'forró': ('Brazilian Regional', 'forró'),
+    'forro tradicional': ('Brazilian Regional', 'forro tradicional'),
+    'forro eletronico': ('Brazilian Regional', 'forro eletronico'),
+    'forro eletrônico': ('Brazilian Regional', 'forro eletrônico'),
+    'forro universitario': ('Brazilian Regional', 'forro universitario'),
+    'forro universitário': ('Brazilian Regional', 'forro universitário'),
+    'forro de vaquejada': ('Brazilian Regional', 'forro de vaquejada'),
+
+    ## Axé / Pagode / Samba
+    'axe': ('Brazilian Regional', 'axe'),
+    'axé': ('Brazilian Regional', 'axé'),
+    'pagode': ('Brazilian Regional', 'pagode'),
+    'pagode baiano': ('Brazilian Regional', 'pagode baiano'),
+    'pagode romantico': ('Brazilian Regional', 'pagode romantico'),
+    'samba': ('Brazilian Regional', 'samba'),
+    'samba enredo': ('Brazilian Regional', 'samba enredo'),
+    'samba de raiz': ('Brazilian Regional', 'samba de raiz'),
+    'samba rock': ('Brazilian Regional', 'samba rock'),
+
+    ## MPB / Bossa Nova / Choro
+    'mpb': ('Brazilian Regional', 'mpb'),
+    'musica popular brasileira': ('Brazilian Regional', 'mpb'),
+    'bossa nova': ('Brazilian Regional', 'bossa nova'),
+    'choro': ('Brazilian Regional', 'choro'),
+    'chorinho': ('Brazilian Regional', 'chorinho'),
+
+    ## Brega / Tecnobrega / Tecnomelody
+    'brega': ('Brazilian Regional', 'brega'),
+    'brega romantico': ('Brazilian Regional', 'brega romantico'),
+    'tecnobrega': ('Brazilian Regional', 'tecnobrega'),
+    'tecnomelody': ('Brazilian Regional', 'tecnomelody'),
+    'melody': ('Brazilian Regional', 'melody'),
+
+    ## Modão / Raiz
+    'modao': ('Brazilian Regional', 'modao'),
+    'modão': ('Brazilian Regional', 'modão'),
+    'moda sertaneja': ('Brazilian Regional', 'moda sertaneja'),
+    'sertanejo de raiz': ('Brazilian Regional', 'sertanejo de raiz'),
 
     ###############################################################################
     # Funk Brasileiro
