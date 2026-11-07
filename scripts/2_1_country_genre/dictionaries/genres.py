@@ -3931,6 +3931,28 @@ GENRE_MAPPINGS: Dict[str, Tuple[str, str]] = {
     'classic bollywood': ('Indian Pop', 'classic bollywood'),
     'golden era bollywood': ('Indian Pop', 'golden era bollywood'),
 
+    ## Playback Singing (Indian film industry)
+    # NOTE: "playback" is a real sub-genre in the Indian film context
+    # (singers who perform songs for actors on screen). It is NOT the
+    # same as "film score" or "soundtrack", which are roles/contexts
+    # and must not be mapped here (they are discarded by the detector).
+    'playback singing': ('Indian Pop', 'playback singing'),
+    'playback singer': ('Indian Pop', 'playback singer'),
+    'playback singing artist': ('Indian Pop', 'playback singing artist'),
+    'playback artist': ('Indian Pop', 'playback artist'),
+    'playback vocalist': ('Indian Pop', 'playback vocalist'),
+    'playback': ('Indian Pop', 'playback'),
+    'playback music': ('Indian Pop', 'playback music'),
+    'playback songs': ('Indian Pop', 'playback songs'),
+    'cantante de playback': ('Indian Pop', 'cantante de playback'),
+    'cantante playback': ('Indian Pop', 'cantante playback'),
+    'bollywood playback': ('Indian Pop', 'bollywood playback'),
+    'bollywood playback singer': ('Indian Pop', 'bollywood playback singer'),
+    'kollywood playback': ('Indian Pop', 'kollywood playback'),
+    'tollywood playback': ('Indian Pop', 'tollywood playback'),
+    'mollywood playback': ('Indian Pop', 'mollywood playback'),
+    'sandalwood playback': ('Indian Pop', 'sandalwood playback'),
+
     ###############################################################################
     # Pakistani Pop
     ###############################################################################
