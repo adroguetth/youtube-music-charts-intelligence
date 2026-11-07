@@ -1,4 +1,4 @@
-"""
+Punjabi"""
 Genres - Genre Normalization Dictionary
 ============================================================================
 Canonical mapping of raw genre strings from external sources to standardized
@@ -3797,130 +3797,121 @@ GENRE_MAPPINGS: Dict[str, Tuple[str, str]] = {
     ## General Indian Pop
     'indian pop': ('Indian Pop', 'indian pop'),
     'desi pop': ('Indian Pop', 'desi pop'),
+    'desi': ('Indian Pop', 'desi'),
     'indipop': ('Indian Pop', 'indipop'),
+    'indi pop': ('Indian Pop', 'indipop'),
+    'indian mainstream pop': ('Indian Pop', 'indian mainstream pop'),
     'pop indio': ('Indian Pop', 'pop indio'),
     'música india': ('Indian Pop', 'música india'),
+    'indian music': ('Indian Pop', 'indian music'),
+
+    ## Languages as Genres (Crucial for AI outputs)
+    'hindi': ('Indian Pop', 'hindi'),
+    'hindi pop': ('Indian Pop', 'hindi pop'),
+    'hindi music': ('Indian Pop', 'hindi music'),
+    'punjabi': ('Indian Pop', 'punjabi'),
+    'tamil': ('Indian Pop', 'tamil'),
+    'telugu': ('Indian Pop', 'telugu'),
+    'bengali': ('Indian Pop', 'bengali'),
+    'marathi': ('Indian Pop', 'marathi'),
+    'gujarati': ('Indian Pop', 'gujarati'),
+    'kannada': ('Indian Pop', 'kannada'),
+    'malayalam': ('Indian Pop', 'malayalam'),
+    'bhojpuri': ('Indian Pop', 'bhojpuri'),
+    'haryanvi': ('Indian Pop', 'haryanvi'),
+    'haryanvi pop': ('Indian Pop', 'haryanvi pop'),
+    'urdu': ('Indian Pop', 'urdu'),
 
     ## Bollywood / Filmi
     'bollywood': ('Indian Pop', 'bollywood'),
-    'filmi': ('Indian Pop', 'filmi'),
+    'bolly wood': ('Indian Pop', 'bollywood'),
     'bollywood music': ('Indian Pop', 'bollywood music'),
-    'filmi music': ('Indian Pop', 'filmi music'),
     'bollywood pop': ('Indian Pop', 'bollywood pop'),
     'bollywood soundtrack': ('Indian Pop', 'bollywood soundtrack'),
     'bollywood songs': ('Indian Pop', 'bollywood songs'),
+    'filmi': ('Indian Pop', 'filmi'),
+    'filmi music': ('Indian Pop', 'filmi music'),
+    'indian film music': ('Indian Pop', 'indian film music'),
+    'indian cinema': ('Indian Pop', 'indian cinema'),
 
-    ## Punjabi pop / Bhangra
+    ## Regional Film Industries (Woods)
+    'kollywood': ('Indian Pop', 'kollywood'),
+    'kollywood music': ('Indian Pop', 'kollywood music'),
+    'tollywood': ('Indian Pop', 'tollywood'),
+    'tollywood music': ('Indian Pop', 'tollywood music'),
+    'mollywood': ('Indian Pop', 'mollywood'),
+    'mollywood music': ('Indian Pop', 'mollywood music'),
+    'sandalwood': ('Indian Pop', 'sandalwood'),
+    'sandalwood music': ('Indian Pop', 'sandalwood music'),
+    'dhallywood': ('Indian Pop', 'dhallywood'),
+
+    ## Punjabi / Bhangra
     'punjabi pop': ('Indian Pop', 'punjabi pop'),
+    'punjabi music': ('Indian Pop', 'punjabi music'),
     'bhangra': ('Indian Pop', 'bhangra'),
     'punjabi bhangra': ('Indian Pop', 'punjabi bhangra'),
     'bhangra pop': ('Indian Pop', 'bhangra pop'),
-    'punjabi music': ('Indian Pop', 'punjabi music'),
 
-    ## Indipop (Indian pop)
-    'indipop': ('Indian Pop', 'indipop'),
-    'indi pop': ('Indian Pop', 'indi pop'),
-    'indian mainstream pop': ('Indian Pop', 'indian mainstream pop'),
+    ## Indian Hip Hop / Rap
+    'indian hip hop': ('Indian Pop', 'indian hip hop'),
+    'desi hip hop': ('Indian Pop', 'desi hip hop'),
+    'indian rap': ('Indian Pop', 'indian rap'),
+    'desi rap': ('Indian Pop', 'desi rap'),
+    'gully rap': ('Indian Pop', 'gully rap'),
+    'gully boy': ('Indian Pop', 'gully rap'),
+    'indian drill': ('Indian Pop', 'indian drill'),
+    'punjabi rap': ('Indian Pop', 'punjabi rap'),
 
-    ## Ghazal
+    ## Indian Rock / Indie / Fusion
+    'indian rock': ('Indian Pop', 'indian rock'),
+    'desi rock': ('Indian Pop', 'desi rock'),
+    'indian indie': ('Indian Pop', 'indian indie'),
+    'indie india': ('Indian Pop', 'indian indie'),
+    'indian fusion': ('Indian Pop', 'indian fusion'),
+    'desi fusion': ('Indian Pop', 'desi fusion'),
+    'indo fusion': ('Indian Pop', 'indo fusion'),
+
+    ## Indian R&B
+    'indian r&b': ('Indian Pop', 'indian r&b'),
+    'indian rnb': ('Indian Pop', 'indian rnb'),
+    'desi r&b': ('Indian Pop', 'desi r&b'),
+
+    ## Devotional / Classical / Folk
+    'devotional': ('Indian Pop', 'devotional'),
+    'bhajan': ('Indian Pop', 'bhajan'),
+    'kirtan': ('Indian Pop', 'kirtan'),
+    'mantra': ('Indian Pop', 'mantra'),
     'ghazal': ('Indian Pop', 'ghazal'),
     'ghazals': ('Indian Pop', 'ghazals'),
     'urdu ghazal': ('Indian Pop', 'urdu ghazal'),
     'hindi ghazal': ('Indian Pop', 'hindi ghazal'),
-
-    ## Qawwali
     'qawwali': ('Indian Pop', 'qawwali'),
     'qawwali music': ('Indian Pop', 'qawwali music'),
     'sufi qawwali': ('Indian Pop', 'sufi qawwali'),
-
-    ## Sufi rock / Sufi pop
+    'sufi': ('Indian Pop', 'sufi'),
     'sufi rock': ('Indian Pop', 'sufi rock'),
     'sufi pop': ('Indian Pop', 'sufi pop'),
     'sufi fusion': ('Indian Pop', 'sufi fusion'),
-
-    ## Carnatic (south classical)
+    
+    ## Classical
     'carnatic': ('Indian Pop', 'carnatic'),
     'carnatic music': ('Indian Pop', 'carnatic music'),
     'carnatic classical': ('Indian Pop', 'carnatic classical'),
     'south indian classical': ('Indian Pop', 'south indian classical'),
-
-    ## Hindustani (north classical)
     'hindustani': ('Indian Pop', 'hindustani'),
     'hindustani classical': ('Indian Pop', 'hindustani classical'),
     'north indian classical': ('Indian Pop', 'north indian classical'),
+    'indian classical': ('Indian Pop', 'indian classical'),
 
-    ## Bengali pop
-    'bengali pop': ('Indian Pop', 'bengali pop'),
-    'bangla pop': ('Indian Pop', 'bangla pop'),
-    'bengali music': ('Indian Pop', 'bengali music'),
-    'kolkata pop': ('Indian Pop', 'kolkata pop'),
-
-    ## Tamil pop / Kollywood
-    'tamil pop': ('Indian Pop', 'tamil pop'),
-    'kollywood': ('Indian Pop', 'kollywood'),
-    'tamil film music': ('Indian Pop', 'tamil film music'),
-    'tamil cinema songs': ('Indian Pop', 'tamil cinema songs'),
-    'chennai pop': ('Indian Pop', 'chennai pop'),
-
-    ## Telugu pop / Tollywood
-    'telugu pop': ('Indian Pop', 'telugu pop'),
-    'tollywood': ('Indian Pop', 'tollywood'),
-    'telugu film music': ('Indian Pop', 'telugu film music'),
-    'hyderabad pop': ('Indian Pop', 'hyderabad pop'),
-
-    ## Malayalam pop / Mollywood
-    'malayalam pop': ('Indian Pop', 'malayalam pop'),
-    'mollywood': ('Indian Pop', 'mollywood'),
-    'malayalam film music': ('Indian Pop', 'malayalam film music'),
-    'kerala pop': ('Indian Pop', 'kerala pop'),
-
-    ## Bhojpuri pop
-    'bhojpuri pop': ('Indian Pop', 'bhojpuri pop'),
-    'bhojpuri music': ('Indian Pop', 'bhojpuri music'),
-    'bhojpuri film songs': ('Indian Pop', 'bhojpuri film songs'),
-
-    ## Rajasthani folk
+    ## Regional Folk
+    'indian folk': ('Indian Pop', 'indian folk'),
+    'desi folk': ('Indian Pop', 'desi folk'),
     'rajasthani folk': ('Indian Pop', 'rajasthani folk'),
     'rajasthani music': ('Indian Pop', 'rajasthani music'),
-
-    ## Gujarati pop
-    'gujarati pop': ('Indian Pop', 'gujarati pop'),
-    'gujarati music': ('Indian Pop', 'gujarati music'),
     'garba': ('Indian Pop', 'garba'),
     'dandiya': ('Indian Pop', 'dandiya'),
-
-    ## Marathi pop
-    'marathi pop': ('Indian Pop', 'marathi pop'),
-    'marathi music': ('Indian Pop', 'marathi music'),
-
-    ## Kannada pop / Sandalwood
-    'kannada pop': ('Indian Pop', 'kannada pop'),
-    'sandalwood': ('Indian Pop', 'sandalwood'),
-    'kannada film music': ('Indian Pop', 'kannada film music'),
-
-    ## Odia pop
-    'odia pop': ('Indian Pop', 'odia pop'),
-    'oriya music': ('Indian Pop', 'oriya music'),
-
-    ## Assamese pop
-    'assamese pop': ('Indian Pop', 'assamese pop'),
-
-    ## Indian rock
-    'indian rock': ('Indian Pop', 'indian rock'),
-    'desi rock': ('Indian Pop', 'desi rock'),
-
-    ## Indian hip hop
-    'indian hip hop': ('Indian Pop', 'indian hip hop'),
-    'desi hip hop': ('Indian Pop', 'desi hip hop'),
-    'indian rap': ('Indian Pop', 'indian rap'),
-
-    ## Indian R&B
-    'indian r&b': ('Indian Pop', 'indian r&b'),
-
-    ## Indian fusion
-    'indian fusion': ('Indian Pop', 'indian fusion'),
-    'desi fusion': ('Indian Pop', 'desi fusion'),
-    'indo fusion': ('Indian Pop', 'indo fusion'),
+    'bihu': ('Indian Pop', 'bihu'),
+    'lavani': ('Indian Pop', 'lavani'),
 
     ## Indian pop by era
     'indipop 80s': ('Indian Pop', 'indipop 80s'),
@@ -3933,9 +3924,6 @@ GENRE_MAPPINGS: Dict[str, Tuple[str, str]] = {
 
     ## Playback Singing (Indian film industry)
     # NOTE: "playback" is a real sub-genre in the Indian film context
-    # (singers who perform songs for actors on screen). It is NOT the
-    # same as "film score" or "soundtrack", which are roles/contexts
-    # and must not be mapped here (they are discarded by the detector).
     'playback singing': ('Indian Pop', 'playback singing'),
     'playback singer': ('Indian Pop', 'playback singer'),
     'playback singing artist': ('Indian Pop', 'playback singing artist'),
