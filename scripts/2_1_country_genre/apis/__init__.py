@@ -86,7 +86,10 @@ from .wikipedia import (
 # AI FALLBACKS — DEEPSEEK → GPT-OSS → QWEN → MUSE SPARK
 # ============================================================================
 from .deepseek import _get_deepseek_client, search_deepseek_fallback
-from .gpt_oss import search_gpt_oss_fallback
+
+# Opción A: El archivo se llama gpt_oss.py, pero la función interna sigue llamándose search_groq_fallback
+from .gpt_oss import search_groq_fallback
+
 from .qwen import search_qwen_fallback
 from .muse import search_muse_fallback
 
@@ -111,7 +114,7 @@ __all__ = [
     "search_deepseek_fallback",
     "_get_deepseek_client",
     # --- GPT-OSS via Groq (secondary AI fallback) ---
-    "search_gpt_oss_fallback",
+    "search_groq_fallback",  # <-- Mantenemos el nombre original
     # --- Qwen via Groq (tertiary AI fallback) ---
     "search_qwen_fallback",
     # --- Muse Spark / Meta (final AI fallback) ---
