@@ -72,10 +72,7 @@ Notes
   circular import `api_clients.deepseek → genre_detector → apis.deepseek`.
   Do not move this import to module level.
 - **`normalize_genre` substring matching is O(n) over all mappings**:
-  the `sorted_mappings` list is recomputed on every call. For the current
-  mapping size (~5,000 entries) this is acceptable, but it is **not
-  cached**. If call volume grows, precompute the sorted list once at
-  module load.
+  the `sorted_mappings` list is recomputed on every call.
 - **The voting system is additive and multiplicative**: base weights come
   from the source tuples `(subgenre, weight, source)`; source multipliers
   and scene bonuses are **multiplicative**; country priority boosts are
@@ -97,7 +94,7 @@ from collections import defaultdict
 from typing import List, Optional, Tuple
 
 from .apis.deepseek import search_deepseek_fallback
-from .apis.gpt_oss import search_gpt_oss_fallback
+from .apis.gpt_oss import search_groq_fallback  # Opción A: Importamos el nombre original
 from .apis.qwen import search_qwen_fallback
 from .apis.muse import search_muse_fallback
 from .apis.musicbrainz import search_musicbrainz_genre_cached
@@ -486,7 +483,7 @@ def search_artist_genre(
             artist,
             country,
             "GPT-OSS",
-            search_gpt_oss_fallback,
+            search_groq_fallback,  # Opción A: Llamada original
             "GPT-OSS API",
         )
         if result:
