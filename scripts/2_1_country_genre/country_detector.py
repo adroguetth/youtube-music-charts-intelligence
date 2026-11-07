@@ -23,7 +23,7 @@ Features
   - Wikipedia other languages: 2 variations per language.
 - Script-aware Wikipedia fallback: the detected script's language edition
   is tried first, followed by a fixed priority list of common editions.
-- Layered AI fallback (DeepSeek → GPT-OSS → Qwen → Muse Spark) invoked only
+- Layered AI fallback (DeepSeek → GPT-OSS → Qwen → Muse Spark) invoked only 
   when all structured sources miss.
 - Explicit rate limiting between source families (`time.sleep`) and per
   language iteration for Wikipedia.
@@ -58,28 +58,18 @@ Notes
 - **Rate limiting is coarse-grained and linear**: `time.sleep(0.8)` after
   MusicBrainz, `time.sleep(0.3)` after Wikipedia EN, `time.sleep(0.2)`
   per language in the non-English Wikipedia loop. These delays are tuned
-  for MusicBrainz's 1 req/s limit and Wikimedia's burst limits. They are
-  **not adaptive** — a large batch will be slow. The trade-off favors
-  robustness over speed; increasing concurrency would require per-source
-  rate-limit tokens, which is out of scope for this module.
+  for MusicBrainz's 1 req/s limit and Wikimedia's burst limits.
 - **Variation caps are deliberate**: `variations[:3]` for structured
-  sources and `variations[:2]` for non-English Wikipedia. Without caps,
-  a name with 15 variations × 12 languages would trigger 180 Wikipedia
-  requests per artist. The caps bound the worst case to
-  `3 + 3 + 3×2 + 12×2 = 36` structured requests plus up to 4 AI calls.
+  sources and `variations[:2]` for non-English Wikipedia.
 - **The winning source string includes the variation only when it differs
-  from the original**: if `var == artist`, the info suffix is empty. This
-  keeps the common case (`"MusicBrainz"`) clean while preserving
-  traceability for fuzzy matches (`"MusicBrainz (var: Beyonce)"`).
+  from the original**: if `var == artist`, the info suffix is empty.
 - **Wikipedia EN is tried before other languages**: the English edition
-  has the highest coverage for globally charting artists. The non-English
-  pass is a fallback for artists whose English page is missing or whose
-  name has non-Latin script.
+  has the highest coverage for globally charting artists.
 - **Non-English language priority order**: detected script language first
   (via `detect_script_from_name`), then a fixed list
   `['es', 'pt', 'fr', 'de', 'it', 'hi', 'ko', 'ja', 'zh', 'ar', 'tr', 'ru']`.
 - **AI fallbacks are not variation-aware**: DeepSeek, GPT-OSS, Qwen, and 
-  Muse Spark are called with the **original** artist name only. 
+  Muse Spark are called with the **original** artist name only.
 - **AI fallbacks are not chained on partial results**: if DeepSeek
   returns a country, the pipeline short-circuits and the other AIs are not
   called.
@@ -95,7 +85,7 @@ import time
 from typing import Optional, Tuple
 
 from .apis.deepseek import search_deepseek_fallback
-from .apis.gpt_oss import search_gpt_oss_fallback
+from .apis.gpt_oss import search_groq_fallback  # Opción A: Importamos el nombre original
 from .apis.qwen import search_qwen_fallback
 from .apis.muse import search_muse_fallback
 from .apis.musicbrainz import search_musicbrainz_country_cached
@@ -213,7 +203,7 @@ def search_country(artist: str) -> Tuple[Optional[str], str]:
 
     # --- 6. GPT-OSS fallback (via Groq) ---
     logger.debug(f"  🔍 Using GPT-OSS fallback for country: {artist}")
-    gpt_oss_country, _, _ = search_gpt_oss_fallback(artist)
+    gpt_oss_country, _, _ = search_groq_fallback(artist)  # Opción A: Llamada original
     if gpt_oss_country:
         return gpt_oss_country, "GPT-OSS API"
 
