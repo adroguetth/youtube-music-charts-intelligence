@@ -7,7 +7,7 @@ HTTP requests to the Meta API `/v1/responses` endpoint with the
 musical genre for a given artist name.
 
 This module acts as the last-resort fallback in the metadata detection
-pipeline, invoked only when all other sources (including Groq) return
+pipeline, invoked only when all other sources (including Qwen) return
 nothing. It includes in-memory caching, rate limiting, structured response
 parsing, and robust JSON extraction with validation/normalization of
 returned values.
@@ -184,7 +184,7 @@ def search_muse_fallback(
     """
     Use the Muse Spark API as final fallback to detect country and/or genre.
 
-    Only called when all other sources (including Groq) return nothing.
+    Only called when all other sources (including Qwen) return nothing.
     Results are cached per artist to avoid redundant API calls.
 
     Parameters
@@ -246,7 +246,7 @@ def search_muse_fallback(
                 ],
             }
         ],
-        # "reasoning_effort": "high",  <-- REMOVED: Not supported by Contributor model in this format
+        # "reasoning_effort": "high",  <-- REMOVED: Not supported by Contributor model
         "stream": False,
     }
 
@@ -275,9 +275,8 @@ def search_muse_fallback(
             _MUSE_CACHE[artist] = (None, None, "Muse empty response")
             return None, None, "Muse empty response"
 
-        # --- Log the raw response cleanly (single line) ---
-        clean_content = content.replace('\n', ' ').replace('\r', '')
-        logger.info(f"  🤖 Muse raw response for {artist}: {clean_content}")
+        # --- Log the raw response exactly as returned ---
+        logger.info(f"  🤖 Muse raw response for {artist}: {content}")
 
         # --- Extract and parse JSON from the response text ---
         json_match = re.search(r"\{[^{}]*\}", content)
