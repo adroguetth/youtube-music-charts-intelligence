@@ -164,9 +164,8 @@ def search_qwen_fallback(
 
         content = response.choices[0].message.content.strip()
         
-        # Log the raw response so we can debug in GitHub Actions
-        clean_content = content.replace('\n', ' ').replace('\r', '')
-        logger.info(f"  🤖 Qwen raw response for {artist}: {clean_content}")
+        # --- Log the raw response exactly as returned ---
+        logger.info(f"  🤖 Qwen raw response for {artist}: {content}")
 
         # --- Extract and parse JSON from the response ---
         json_match = re.search(r"\{[^{}]*\}", content)
