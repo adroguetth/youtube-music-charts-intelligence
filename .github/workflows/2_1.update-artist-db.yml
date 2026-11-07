@@ -2,7 +2,7 @@ name: 2.1 - Update Artist Database
 
 on:
   schedule:
-    - cron: '0 13 * * 6'  # Saturday at 13:00 UTC (1 hour after Script 1)
+    - cron: '0 13 * * 1'  # Monday at 13:00 UTC (1 hour after Script 1)
   
   workflow_dispatch:
 
