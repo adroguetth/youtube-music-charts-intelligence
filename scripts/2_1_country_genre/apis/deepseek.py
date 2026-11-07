@@ -172,9 +172,8 @@ Do not include any additional text outside the JSON object.
         )
         content = response.choices[0].message.content.strip()
 
-        # --- Log the raw response cleanly (single line) ---
-        clean_content = content.replace('\n', ' ').replace('\r', '')
-        logger.info(f"  🤖 DeepSeek raw response for {artist}: {clean_content}")
+        # --- Log the raw response exactly as returned ---
+        logger.info(f"  🤖 DeepSeek raw response for {artist}: {content}")
 
         # Extract JSON from response
         json_match = re.search(r'\{[^{}]*\}', content)
