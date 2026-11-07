@@ -2,11 +2,11 @@
 GPT-OSS API Client (via Groq) - Fallback Country and Genre Detection
 ============================================================================
 Fallback detection module for musical artist metadata. Uses the official
-Groq SDK to query the GPT-OSS-120B model when other sources (including
+Groq SDK to query the OpenAI GPT-OSS-120B model when other sources (including
 DeepSeek) return no results. Provides country of origin and primary
 musical genre for a given artist name.
 
-This module acts as a last-resort fallback in the metadata detection
+This module acts as a secondary AI fallback in the metadata detection
 pipeline. It includes lazy client initialization, in-memory caching, rate
 limiting, and robust JSON extraction with validation/normalization of
 returned values.
@@ -37,8 +37,7 @@ Notes
 -----
 - The module-level client and cache are singletons shared across calls
   within the same process.
-- Rate limiting is applied via a 0.3s sleep between calls (Groq is fast,
-  but the delay keeps usage polite).
+- Rate limiting is applied via a 0.3s sleep between calls.
 - The prompt is intentionally identical to the DeepSeek fallback prompt
   for consistency across fallback sources.
 - Failures are cached as `(None, None, "Groq failed")` to avoid retrying
@@ -166,7 +165,7 @@ def search_groq_fallback(
     context_country: Optional[str] = None,
 ) -> Tuple[Optional[str], Optional[str], str]:
     """
-    Use the Groq API as a fallback to detect country and/or genre.
+    Use the Groq API (GPT-OSS-120B) as a fallback to detect country and/or genre.
 
     Only called when other sources (including DeepSeek) return nothing.
     Results are cached per artist to avoid redundant API calls.
@@ -213,7 +212,7 @@ def search_groq_fallback(
 
     try:
         # --- Call the model via the official Groq SDK ---
-        # Using openai/gpt-oss-120b, the replacement for Llama in the free tier
+        # Using OpenAI GPT-OSS-120B, the replacement for Llama in the free tier
         response = client.chat.completions.create(
             model="openai/gpt-oss-120b",
             messages=[{"role": "user", "content": prompt}],
@@ -223,8 +222,8 @@ def search_groq_fallback(
 
         content = response.choices[0].message.content.strip()
         
-        # Log the raw response so we can debug in GitHub Actions
-        logger.info(f"  🤖 Groq raw response for {artist}: {content[:100]}...")
+        # Log the raw response exactly as returned
+        logger.info(f"  🤖 GPT-OSS raw response for {artist}: {content}")
 
         # --- Extract and parse JSON from the response ---
         json_match = re.search(r"\{[^{}]*\}", content)
@@ -250,10 +249,10 @@ def search_groq_fallback(
             return result
 
     except json.JSONDecodeError as e:
-        logger.error(f"  ❌ Groq JSON parse error for {artist}: {e}")
+        logger.error(f"  ❌ GPT-OSS JSON parse error for {artist}: {e}")
     except Exception as e:
         # Changed to logger.error so the exact Groq API error shows up in the workflow log
-        logger.error(f"  ❌ Groq API error for {artist}: {e}")
+        logger.error(f"  ❌ GPT-OSS API error for {artist}: {e}")
 
     result = (None, None, "Groq failed")
     _GROQ_CACHE[artist] = result
