@@ -1,4 +1,4 @@
-Punjabi"""
+"""
 Genres - Genre Normalization Dictionary
 ============================================================================
 Canonical mapping of raw genre strings from external sources to standardized
