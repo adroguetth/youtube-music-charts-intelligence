@@ -1,22 +1,36 @@
 """
-Config - Paths and Logging for Song Catalog Builder
+Config - Paths, Constants and Logging Configuration
 ============================================================================
-Centralized configuration for the song catalog builder pipeline.
+Centralized configuration module for the song catalog builder (Script 2.2).
 
-This module is the single source of truth for all filesystem paths and
-logging setup. It guarantees that both the ETL pipeline (`migrate.py`) and
-the resolution logic (`resolver.py`) operate on the same directories and
-share a consistent log format.
+This module defines all filesystem paths, filename patterns, and the shared
+logger instance used across the `2_2_build_song_catalog` package.
 
-Directory Structure Assumptions:
-    project_root/
-    ├── charts_archive/
-    │   ├── 1_download-chart/
-    │   │   └── databases/              <-- SOURCE_DIR
-    │   ├── 2_1.countries-genres-artist/
-    │   │   └── artist_countries_genres.db  <-- ARTIST_DB_PATH
-    │   └── 2_2.build-song-catalog/     <-- TARGET_DIR
-    │       └── build_song.db           <-- TARGET_DB_NAME
+Features
+--------
+- Repository-relative paths: ensures consistent behavior across local
+  development and GitHub Actions CI/CD environments.
+- Directory auto-creation: creates the target directory structure if it
+  doesn't exist.
+- Centralized logging: provides a single configured `logger` instance that
+  can be imported by all other modules.
+- Filename regex: compiled pattern for identifying weekly YouTube Charts
+  databases.
+
+Dependencies
+------------
+- External: logging, re, sys, pathlib (stdlib).
+
+Requirements
+------------
+- Python 3.7+
+
+Notes
+-----
+- The paths are resolved dynamically based on the location of this file
+  (`__file__`), making the script fully portable.
+- The `logger` is configured to output to `sys.stdout` to ensure compatibility
+  with GitHub Actions log capture.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -24,86 +38,88 @@ Email: adroguett.consultor@gmail.com
 """
 
 import logging
+import re
 import sys
 from pathlib import Path
 
+
 # ============================================================================
-# PATH RESOLUTION
+# DIRECTORY STRUCTURE CONFIGURATION
 # ============================================================================
-# Determine the repository root dynamically.
-# Assuming this file is at: project_root/scripts/2_2_build_song_catalog/config.py
-# -> parents[0] = 2_2_build_song_catalog
-# -> parents[1] = scripts
-# -> parents[2] = project_root
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+# Determine repository root (two levels up from this file)
+REPO_ROOT: Path = Path(__file__).parent.parent.parent
 
-# 1. Source directory (Input from Script 1)
-SOURCE_DIR: Path = _REPO_ROOT / "charts_archive" / "1_download-chart" / "databases"
+# Source: Where weekly chart databases are stored (Script 1 output)
+SOURCE_DIR: Path = REPO_ROOT / "charts_archive" / "1_download-chart" / "databases"
 
-# 2. Artist Metadata Database (Input from Script 2.1)
-ARTIST_DB_PATH: Path = _REPO_ROOT / "charts_archive" / "2_1.countries-genres-artist" / "artist_countries_genres.db"
+# Artist metadata database path (country + macro-genre per artist, Script 2.1 output)
+ARTIST_DB_PATH: Path = (
+    REPO_ROOT / "charts_archive" / "2_1.countries-genres-artist" / "artist_countries_genres.db"
+)
 
-# 3. Target Directory and Database (Output of Script 2.2)
-TARGET_DIR: Path = _REPO_ROOT / "charts_archive" / "2_2.build-song-catalog"
+# Target: Where the canonical song catalog will be maintained
+TARGET_DIR: Path = REPO_ROOT / "charts_archive" / "2_2.build-song-catalog"
 TARGET_DB_NAME: str = "build_song.db"
 
-# Ensure the target directory exists safely upon import.
-# This prevents "unable to open database file" errors during SQLite connection.
+
+# ============================================================================
+# REGEX PATTERNS
+# ============================================================================
+# Regex pattern for YouTube Charts weekly database filenames
+# Format: youtube_charts_YYYY-Www.db (e.g., youtube_charts_2026-W15.db)
+DB_FILENAME_PATTERN: re.Pattern = re.compile(r"youtube_charts_20\d{2}-W\d{1,2}\.db$")
+
+
+# ============================================================================
+# DIRECTORY INITIALIZATION
+# ============================================================================
+# Create target directory structure if it doesn't exist
+# This is safe to execute at import time as it uses `parents=True`
 TARGET_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ============================================================================
 # LOGGING CONFIGURATION
 # ============================================================================
-def setup_logger(name: str = "song_catalog") -> logging.Logger:
+def _setup_logger() -> logging.Logger:
     """
-    Configure and return a centralized logger.
-    
-    Outputs to stdout with a clean format suitable for GitHub Actions
-    and local terminal execution.
+    Configure and return the shared logger instance.
 
-    Parameters
-    ----------
-    name : str
-        Name of the logger instance.
+    The logger is configured to write to `sys.stdout` with a simple message
+    format (no timestamps) to match the style of Script 2.1 and ensure
+    readability in CI/CD environments.
 
     Returns
     -------
     logging.Logger
-        Configured logger object.
+        Configured logger instance named '2_2_catalog'.
     """
-    _logger = logging.getLogger(name)
+    log = logging.getLogger("2_2_catalog")
     
-    # Only configure if it doesn't have handlers yet (prevents duplicate logs)
-    if not _logger.handlers:
-        _logger.setLevel(logging.INFO)
-        
-        # Standard output handler
+    # Prevent adding multiple handlers if the module is reloaded
+    if not log.handlers:
+        log.setLevel(logging.INFO)
         handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter('%(message)s'))
+        log.addHandler(handler)
+        log.propagate = False
         
-        # Format: "2026-11-07 12:00:00 | INFO | message"
-        formatter = logging.Formatter(
-            fmt="%(asctime)s | %(levelname)-7s | %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S"
-        )
-        handler.setFormatter(formatter)
-        _logger.addHandler(handler)
-        
-        # Prevent propagation to the root logger to avoid double logging
-        _logger.propagate = False
-        
-    return _logger
+    return log
 
-# Export the singleton logger instance for use across the package
-logger = setup_logger()
+
+# Shared logger instance for the entire package
+logger: logging.Logger = _setup_logger()
+
 
 # ============================================================================
 # PUBLIC API
 # ============================================================================
 __all__ = [
+    "REPO_ROOT",
     "SOURCE_DIR",
     "ARTIST_DB_PATH",
     "TARGET_DIR",
     "TARGET_DB_NAME",
+    "DB_FILENAME_PATTERN",
     "logger",
 ]
