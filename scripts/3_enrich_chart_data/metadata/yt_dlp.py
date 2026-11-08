@@ -1,11 +1,11 @@
 """
 yt-dlp - Command-Line Extraction Layer
 ============================================================================
-Layer 3 of the metadata retrieval fallback chain.
+Layer 2 of the metadata retrieval fallback chain.
 
 Uses `yt-dlp` to extract video metadata without browser automation. This is
-the last-resort layer: it is slower and more likely to be blocked by
-YouTube's bot detection, but it requires no API key and no Chrome driver.
+the preferred fallback layer (before Selenium) because it is significantly
+faster and consumes less memory.
 
 To maximize success, the function rotates through multiple "player clients"
 (android → ios → android+web → web). YouTube treats these clients
@@ -13,13 +13,12 @@ differently, and what fails for one often succeeds for another.
 
 Features
 --------
-- Auto-installation of `yt-dlp` if missing.
-- Auto-upgrade of `yt-dlp` to the latest version (extractor fixes ship
-  frequently).
-- Multi-client rotation: android → ios → android+web → web.
-- Retry logic with configurable sleep intervals to avoid rate limits.
+- Auto-installation and auto-upgrade of `yt-dlp`.
+- Multi-client rotation with strict validation of returned data.
+- Deep validation: a result is only accepted if it contains a valid
+  `duration` field. Empty dicts or incomplete responses are rejected.
 - Graceful degradation: returns the zeroed metadata dict with a populated
-  `error` field if all clients fail.
+  `error` field if all clients fail or return invalid data.
 
 Dependencies
 ------------
@@ -34,9 +33,10 @@ Notes
 -----
 - yt-dlp returns upload dates as `YYYYMMDD` (no separators). This module
   converts them to ISO format (`YYYY-MM-DD`) before passing to the detector.
-- The `extract_info` call uses `download=False`, so no media is downloaded;
-  only metadata is fetched.
-- If all clients fail, the last error message is preserved for diagnostics.
+- YouTube frequently updates its bot-detection mechanisms. When yt-dlp
+  returns an empty dict or an error string like "Sign in to confirm you're
+  not a bot", this module rejects the result and lets the orchestrator fall
+  back to Selenium.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -57,7 +57,8 @@ from ..config import logger
 
 def fetch_metadata_via_ytdlp(url: str, artists_csv: str = "") -> dict:
     """
-    Fetch video metadata using yt-dlp with multi-client rotation.
+    Fetch video metadata using yt-dlp with multi-client rotation and
+    strict validation.
 
     Parameters
     ----------
@@ -69,8 +70,9 @@ def fetch_metadata_via_ytdlp(url: str, artists_csv: str = "") -> dict:
     Returns
     -------
     dict
-        Populated metadata dict. If all clients fail, the `error` key is
-        non-empty and all other fields remain at their zero defaults.
+        Populated metadata dict. If all clients fail or return invalid
+        data, the `error` key is non-empty and all other fields remain at
+        their zero defaults.
     """
     # Local defaults — mirror _empty_metadata() from the orchestrator
     metadata = {
@@ -90,6 +92,11 @@ def fetch_metadata_via_ytdlp(url: str, artists_csv: str = "") -> dict:
         "region_restricted": False,
         "error": "",
     }
+
+    # Early validation: reject empty or non-string URLs
+    if not url or not isinstance(url, str) or not url.strip():
+        metadata["error"] = "yt-dlp error: URL is empty, None, or not a string"
+        return metadata
 
     # Ensure yt-dlp is available
     try:
@@ -141,14 +148,22 @@ def fetch_metadata_via_ytdlp(url: str, artists_csv: str = "") -> dict:
         try:
             with yt_dlp.YoutubeDL(ydl_config) as ydl:
                 info = ydl.extract_info(url, download=False)
-            if info:
+
+            # STRICT VALIDATION:
+            # yt-dlp can return an empty dict or a dict without 'duration'
+            # when YouTube blocks the request (e.g., "Sign in to confirm").
+            # Reject these responses and try the next client.
+            if info and info.get("duration") is not None:
                 break
+            else:
+                last_error = "yt-dlp returned incomplete info (missing duration)"
+                info = None
         except Exception as e:
             last_error = str(e)
             continue
 
     if not info:
-        metadata["error"] = f"yt-dlp could not extract info: {last_error}"
+        metadata["error"] = f"yt-dlp failed: {last_error}"
         return metadata
 
     duration = info.get("duration", 0)
