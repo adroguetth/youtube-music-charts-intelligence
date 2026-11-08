@@ -3,7 +3,7 @@ name: 3 - Enrich Chart Data
 on:
   schedule:
     # Se ejecuta todos los lunes a las 14:00 UTC
-    - cron: '00 14 * * 1'
+    - cron: '00 15 * * 1'
   
   workflow_dispatch:
 
