@@ -27,24 +27,20 @@ selenium==4.27.1
 webdriver-manager==4.0.2
 
 # ============================================================
-# Script 4: Notebook Generator (Jupyter + Visualizations)
+# Script 4: Report Generator (Quarto + Visualizations + AI)
 # ============================================================
-jupyter==1.1.1
-nbformat==5.10.4
-nbconvert==7.16.5
+# Quarto is installed at the system level in GitHub Actions, not via pip.
 matplotlib==3.10.1
 seaborn==0.13.2
 squarify==0.4.4
 scipy==1.15.2
 numpy==2.2.4
+requests==2.32.3
 
 # ============================================================
-# Script 5: Export to PDF + Google Drive
+# Script 5: Export to Google Drive (Optional Future)
 # ============================================================
-# PDF conversion (Playwright-based webpdf, no LaTeX needed)
-# playwright>=1.61.0  <-- Ya instalado en el Script 1, no lo repitas aquí.
-
-# Google Drive API
+# (PDF generation is handled natively by Quarto, no extra libraries needed)
 google-auth-httplib2==0.2.0
 google-auth-oauthlib==1.2.1
 
