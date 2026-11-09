@@ -1,0 +1,57 @@
+---
+title: "YouTube Music Intelligence"
+subtitle: "Reporte Semanal de Tendencias Musicales"
+date: today
+format:
+  html:
+    theme: [cosmo, styles.css]
+    toc: false
+    embed-resources: true
+    code-fold: true
+    code-summary: "Ver código de Python"
+  pdf:
+    pdf-engine: weasyprint
+    page-size: A4
+    margin:
+      top: 20mm
+      bottom: 20mm
+      left: 15mm
+      right: 15mm
+execute:
+  echo: false
+  warning: false
+  message: false
+params:
+  week_str: "2026-W45"
+  ai_intro: "Resumen no disponible."
+  ai_insights: {}
+---
+
+```{python}
+#| label: setup
+#| echo: false
+#| include: false
+
+import sys
+from pathlib import Path
+import matplotlib.pyplot as plt
+from IPython.display import HTML, display
+
+# Add repo root to path to import our modules
+sys.path.append(str(Path.cwd().parent))
+
+from scripts.4_report_generator.config import YT_RED, YT_TEXT, YT_GRAY, YT_BG, YT_SURFACE
+from scripts.4_report_generator.builder.charts import (
+    setup_theme, 
+    plot_main_trend, 
+    plot_top_songs, 
+    plot_country_distribution,
+    format_number
+)
+from scripts.4_report_generator.utils.db_loader import load_data_for_period
+
+# Apply YouTube Design System to all charts
+setup_theme()
+
+# Load data based on the period param (default weekly for now)
+df, week_str = load_data_for_period("weekly")
