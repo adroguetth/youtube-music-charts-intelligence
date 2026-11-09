@@ -2,7 +2,7 @@ name: 4 - Generate Report
 
 on:
   schedule:
-    # Se ejecuta a las 15:30 UTC (30 min después del Script 3)
+    # Se ejecuta a las 16:00 UTC (30 min después del Script 3)
     - cron: '30 15 * * 1'
   
   workflow_dispatch:
