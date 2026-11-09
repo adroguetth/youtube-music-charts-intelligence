@@ -1,0 +1,64 @@
+name: 4 - Generate Report
+
+on:
+  schedule:
+    # Se ejecuta a las 15:30 UTC (30 min después del Script 3)
+    - cron: '30 15 * * 1'
+  
+  workflow_dispatch:
+
+jobs:
+  generate-report:
+    name: Generate Quarto Report
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    permissions:
+      contents: write
+    
+    steps:
+    - name: 📚 Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: 🐍 Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+        cache: 'pip'
+    
+    - name: 📦 Install dependencies
+      run: |
+        pip install -r requirements.txt
+    
+    - name: 📊 Install Quarto
+      uses: quarto-dev/quarto-actions/setup@v2
+      with:
+        version: '1.5.57' # Usa una versión estable reciente
+    
+    - name: 🚀 Generate Reports
+      run: |
+        python -m scripts.4_report_generator --lang both --format html
+      env:
+        DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        GITHUB_ACTIONS: true
+    
+    - name: 📤 Commit and push reports
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        
+        # Solo agregamos los HTML generados
+        git add reports/*.html
+        
+        if git diff --cached --quiet; then
+          echo "🔭 No changes to commit"
+        else
+          DATE=$(date +'%Y-%m-%d')
+          git commit -m "📊 Generated weekly report ${DATE} [Automated]"
+          
+          git pull --rebase origin main
+          git push origin HEAD:main
+          echo "✅ Reports pushed successfully"
+        fi
