@@ -15,12 +15,13 @@ Notes
 - This subpackage imports `nbformat` and `pandas`, and depends on `core`
   for data and metrics. Nothing in `core` imports from here: the
   dependency goes one way only.
-- Imports are absolute (`from report.builders import ...`), not relative
-  (`from .builders import ...`), because `main.py` is executed in script
-  mode and `report` is a top-level module on `sys.path`. Relative imports
-  break with ``ImportError: attempted relative import beyond top-level
-  package`` when `report.builders` imports from `core.metrics` via a
-  parent-relative path.
+- Imports are absolute (`from report.x import ...`), not relative
+  (`from .x import ...`), because `main.py` is executed in script mode
+  and `report` is a top-level module on `sys.path`.
+- `BUILDERS` is defined in `report.sections` (the registry that wires
+  section ids to builder functions), not in `report.builders` (which
+  only defines the individual `build_*` functions). Import it from
+  `report.sections`.
 - Builders return `nbformat` cells. They do not print, log, or write
   files. All I/O happens in `notebook.generate_notebook` and in
   `main.py`.
@@ -36,9 +37,8 @@ Email: adroguett.consultor@gmail.com
 
 from __future__ import annotations
 
-from report.builders import BUILDERS
 from report.notebook import generate_notebook
-from report.sections import WEEKLY_SECTIONS
+from report.sections import BUILDERS, WEEKLY_SECTIONS
 from report.titles import section_title
 
 __all__ = [
