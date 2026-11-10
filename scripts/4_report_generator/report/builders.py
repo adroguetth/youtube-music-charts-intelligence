@@ -25,11 +25,17 @@ Notes
   dashboard and any future consumer.
 - Builders do not print or log. They build cells. Logging happens in
   `main.py`.
-- Code cells reference the names imported in the notebook setup cell
-  (`general_stats`, `genre_stats`, `top_songs`, ...). The setup cell is
-  emitted by `builders.build_setup` and is always the first code cell in
-  the notebook. If you rename a metric function, update both the setup
-  cell and the builder that calls it.
+- Imports are absolute (`from core.metrics import ...`,
+  `from report.titles import ...`), not relative. In script mode,
+  `core` and `report` are top-level modules on `sys.path`; parent-relative
+  imports (`from ..core.metrics import ...`) raise
+  ``ImportError: attempted relative import beyond top-level package``.
+- Code cells reference metric functions by their plain names
+  (`general_stats`, `genre_stats`, `top_songs`, ...). Those names are
+  made available in the notebook's namespace by `SETUP_CODE`, which is
+  emitted once by `builders.build_setup` before the first section. If you
+  rename a metric function, update both `SETUP_CODE` and the builder that
+  calls it.
 - AI-generated insights (v2.0) will be injected by
   `report.notebook.generate_notebook` between a section's cells and the
   next section's header. No builder needs to change for that.
@@ -44,7 +50,7 @@ from __future__ import annotations
 import pandas as pd
 from nbformat.v4 import new_code_cell, new_markdown_cell
 
-from ..core.metrics import (
+from core.metrics import (
     collaborations as metrics_collaborations,
     general_stats as metrics_general_stats,
     genre_stats as metrics_genre_stats,
@@ -53,7 +59,7 @@ from ..core.metrics import (
     top_songs as metrics_top_songs,
     video_metrics as metrics_video_metrics,
 )
-from .titles import section_title
+from report.titles import section_title
 
 
 # ============================================================================
@@ -96,6 +102,119 @@ def format_number(x):
     return f"{x:,.0f}"
 
 
+# Metric functions: try to import from the package, fall back to inline.
+try:
+    from core.metrics import (
+        collaborations,
+        general_stats,
+        genre_stats,
+        top_countries,
+        top_countries_by_likes,
+        top_songs,
+        top_songs_by_country,
+        video_metrics,
+    )
+except ImportError:
+    # Self-contained fallback so the notebook runs when moved or opened
+    # outside the repository (e.g. Colab).
+    def general_stats(df):
+        return {
+            "total_songs": int(len(df)),
+            "unique_countries": int(df["artist_country"].nunique()),
+            "unique_genres": int(df["macro_genre"].nunique()),
+            "total_views": int(df["views"].sum()),
+            "total_likes": int(df["likes"].sum()),
+            "total_comments": int(df["comment_count"].sum()),
+            "avg_views": float(df["views"].mean()),
+            "avg_likes": float(df["likes"].mean()),
+            "avg_engagement": float(df["engagement"].mean()),
+        }
+
+    def top_countries(df, n=10):
+        return (
+            df.groupby("artist_country")
+            .agg(total_songs=("rank", "count"), total_views=("views", "sum"))
+            .reset_index()
+            .sort_values("total_songs", ascending=False)
+            .head(n)
+            .reset_index(drop=True)
+        )
+
+    def top_countries_by_likes(df, n=10):
+        return (
+            df.groupby("artist_country")["likes"]
+            .sum()
+            .reset_index()
+            .rename(columns={"likes": "total_likes"})
+            .sort_values("total_likes", ascending=False)
+            .head(n)
+            .reset_index(drop=True)
+        )
+
+    def top_songs_by_country(df, country, metric="views", n=5):
+        cols = ["track_name", "artist_names", "views", "likes", "engagement"]
+        return (
+            df[df["artist_country"] == country]
+            .nlargest(n, metric)[cols]
+            .reset_index(drop=True)
+        )
+
+    def genre_stats(df):
+        out = (
+            df.groupby("macro_genre")
+            .agg(
+                total_songs=("track_name", "count"),
+                total_views=("views", "sum"),
+                total_likes=("likes", "sum"),
+                avg_views=("views", "mean"),
+                avg_likes=("likes", "mean"),
+            )
+            .reset_index()
+        )
+        out["engagement_rate"] = (
+            out["total_likes"] / out["total_views"].replace(0, pd.NA) * 100
+        ).fillna(0).round(2)
+        return out.sort_values("total_songs", ascending=False).reset_index(drop=True)
+
+    def video_metrics(df):
+        flags = {
+            "Official": "is_official_video",
+            "Lyric": "is_lyric_video",
+            "Live": "is_live_performance",
+        }
+        rows = []
+        total = len(df)
+        for label, flag in flags.items():
+            subset = df[df[flag] == 1]
+            rows.append({
+                "video_type": label,
+                "count": int(len(subset)),
+                "pct": float(len(subset) / total * 100) if total else 0.0,
+                "avg_views": float(subset["views"].mean()) if len(subset) else 0.0,
+                "avg_engagement": float(subset["engagement"].mean()) if len(subset) else 0.0,
+            })
+        return pd.DataFrame(rows)
+
+    def top_songs(df, metric="views", n=10):
+        cols = ["rank", "track_name", "artist_names", metric, "artist_country"]
+        return df.nlargest(n, metric)[cols].reset_index(drop=True)
+
+    def collaborations(df):
+        grouped = (
+            df.groupby("is_collaboration")
+            .agg(
+                count=("track_name", "count"),
+                avg_views=("views", "mean"),
+                avg_engagement=("engagement", "mean"),
+            )
+            .reset_index()
+        )
+        grouped["is_collaboration"] = grouped["is_collaboration"].map(
+            {0: "Solo", 1: "Collaboration"}
+        )
+        return grouped
+
+
 DB_PATH = Path("../../charts_archive/3_enrich-chart-data/{db_filename}")
 conn = sqlite3.connect(DB_PATH)
 df = pd.read_sql_query("SELECT * FROM enriched_songs", conn)
@@ -111,7 +230,7 @@ df["engagement"] = np.where(
 
 def build_setup(period, language: str) -> list:
     """
-    Emit the setup cell: imports, palette, helpers and data loading.
+    Emit the setup cell: imports, palette, metric functions and data loading.
 
     This cell is not tied to a report section. It is prepended by
     `report.notebook.generate_notebook` before the first section.
