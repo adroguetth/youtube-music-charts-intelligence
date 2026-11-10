@@ -15,6 +15,11 @@ Notes
 -----
 - This module contains no business logic and no metric definitions.
   Everything it emits comes from `report.builders` and `report.titles`.
+- Imports are absolute (`from report.builders import ...`,
+  `from report.sections import ...`, `from report.titles import ...`),
+  not relative. In script mode, `report` is a top-level module on
+  `sys.path`; relative imports raise
+  ``ImportError: attempted relative import beyond top-level package``.
 - AI-generated insights (v2.0) will be injected here, between a
   section's cells and the next section's header, via an optional
   `insights` parameter. The v1.0 signature stays compatible:
@@ -36,9 +41,9 @@ import nbformat as nbf
 import pandas as pd
 from nbformat.v4 import new_markdown_cell, new_notebook
 
-from .builders import build_setup
-from .sections import BUILDERS, WEEKLY_SECTIONS
-from .titles import notebook_title
+from report.builders import build_setup
+from report.sections import BUILDERS, WEEKLY_SECTIONS
+from report.titles import notebook_title
 
 
 # ============================================================================
