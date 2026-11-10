@@ -27,15 +27,16 @@ Notes
   `main.py`.
 - Imports are absolute (`from core.metrics import ...`,
   `from report.titles import ...`), not relative. In script mode,
-  `core` and `report` are top-level modules on `sys.path`; parent-relative
-  imports (`from ..core.metrics import ...`) raise
-  ``ImportError: attempted relative import beyond top-level package``.
+  `core` and `report` are top-level modules on `sys.path`.
+- `SETUP_CODE` contains Python f-strings with `{}` placeholders. It must
+  NOT be processed with `str.format()`, because `format` would try to
+  interpret those braces as format fields and raise
+  ``KeyError: 'x / 1_000_000_000'``. The DB filename is injected with
+  `str.replace("__DB_FILENAME__", ...)` instead, which does not touch
+  braces.
 - Code cells reference metric functions by their plain names
   (`general_stats`, `genre_stats`, `top_songs`, ...). Those names are
-  made available in the notebook's namespace by `SETUP_CODE`, which is
-  emitted once by `builders.build_setup` before the first section. If you
-  rename a metric function, update both `SETUP_CODE` and the builder that
-  calls it.
+  made available in the notebook's namespace by `SETUP_CODE`.
 - AI-generated insights (v2.0) will be injected by
   `report.notebook.generate_notebook` between a section's cells and the
   next section's header. No builder needs to change for that.
@@ -215,7 +216,7 @@ except ImportError:
         return grouped
 
 
-DB_PATH = Path("../../charts_archive/3_enrich-chart-data/{db_filename}")
+DB_PATH = Path("../../charts_archive/3_enrich-chart-data/__DB_FILENAME__")
 conn = sqlite3.connect(DB_PATH)
 df = pd.read_sql_query("SELECT * FROM enriched_songs", conn)
 conn.close()
@@ -234,9 +235,15 @@ def build_setup(period, language: str) -> list:
 
     This cell is not tied to a report section. It is prepended by
     `report.notebook.generate_notebook` before the first section.
+
+    Notes
+    -----
+    The DB filename is injected with `str.replace`, not `str.format`,
+    because `SETUP_CODE` contains Python f-strings whose `{}` braces would
+    otherwise be interpreted as `str.format` fields.
     """
     db_filename = f"youtube_charts_{period.label}_enriched.db"
-    code = SETUP_CODE.format(db_filename=db_filename)
+    code = SETUP_CODE.replace("__DB_FILENAME__", db_filename)
     return [new_code_cell(code)]
 
 
