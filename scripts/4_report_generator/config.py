@@ -13,6 +13,14 @@ Notes
 -----
 - Paths are resolved relative to the repository root, computed from this
   file's location. Do not hardcode absolute paths.
+- The repository root is computed with `parents[2]`, not `parents[3]`.
+  `config.py` lives inside `4_report_generator/`, so:
+      parents[0] = 4_report_generator/
+      parents[1] = scripts/
+      parents[2] = <repo root>
+  A previous version used `parents[3]`, which resolved one level above
+  the repository root and caused `latest_week_label` to search in a
+  directory that does not exist.
 - The logger is created here and imported by every submodule to guarantee
   a single, consistent output stream. Importing this module multiple
   times does not duplicate handlers.
@@ -36,7 +44,10 @@ from pathlib import Path
 # REPOSITORY ROOT
 # ============================================================================
 # config.py → 4_report_generator → scripts → <repo root>
-REPO_ROOT: Path = Path(__file__).resolve().parents[3]
+# parents[0] = 4_report_generator/
+# parents[1] = scripts/
+# parents[2] = <repo root>
+REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 
 # ============================================================================
 # PATHS
