@@ -3,9 +3,23 @@
 # Manual-only workflow to validate the 4_report_generator package and
 # publish the resulting notebooks into the repository.
 #
+# Pipeline:
+#   1. Checkout repo
+#   2. Set up Python
+#   3. Install dependencies
+#   4. List enriched DBs (sanity check)
+#   5. Generate notebooks (no outputs yet, just cells)
+#   6. Execute notebooks in place (renders charts and tables into outputs)
+#   7. Enforce retention: keep only 4 most recent notebooks per language
+#   8. Commit and push if anything changed
+#
 # Retention policy: only the 4 most recent notebooks per language are
 # kept under Notebook_EN/weekly/ and Notebook_ES/weekly/. Older ones are
 # removed before committing, so the repository does not grow unbounded.
+#
+# The generator itself (main.py) does not execute the notebooks; it only
+# emits them. Execution is done here with `nbconvert --execute` so the
+# committed `.ipynb` files contain the rendered charts.
 
 name: Test Report Generator
 
@@ -34,52 +48,94 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout the repository (full history not needed, but write is)
+      # ----------------------------------------------------------------------
+      # 1. Checkout the repository
+      # ----------------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ----------------------------------------------------------------------
       # 2. Set up Python
+      # ----------------------------------------------------------------------
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      # 3. Install dependencies
+      # ----------------------------------------------------------------------
+      # 3. Install dependencies (generator + notebook execution)
+      # ----------------------------------------------------------------------
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas numpy matplotlib seaborn squarify scipy nbformat pyyaml
+          pip install \
+            pandas numpy matplotlib seaborn squarify scipy nbformat pyyaml \
+            jupyter nbconvert
 
+      # ----------------------------------------------------------------------
       # 4. Sanity check: list the enriched DBs visible to the runner
+      # ----------------------------------------------------------------------
       - name: List enriched DBs
         run: |
           echo "Archive directory: charts_archive/3_enrich-chart-data"
           ls -la charts_archive/3_enrich-chart-data/ | head -50
 
-      # 5. Run the generator
+      # ----------------------------------------------------------------------
+      # 5. Generate notebooks (cells only, no outputs yet)
+      # ----------------------------------------------------------------------
       - name: Generate notebooks
         run: |
           python scripts/4_report_generator/main.py \
             --language "${{ inputs.language }}" \
             ${{ inputs.week != '' && format('--week {0}', inputs.week) || '' }}
 
-      # 6. Enforce retention: keep only the 4 most recent per language
+      # ----------------------------------------------------------------------
+      # 6. Execute notebooks in place so they contain rendered outputs
+      # ----------------------------------------------------------------------
+      - name: Execute notebooks
+        run: |
+          set -e
+          shopt -s nullglob
+          notebooks=(Notebook_EN/weekly/*.ipynb Notebook_ES/weekly/*.ipynb)
+          if [ ${#notebooks[@]} -eq 0 ]; then
+            echo "No notebooks found to execute."
+            exit 1
+          fi
+          for nb in "${notebooks[@]}"; do
+            echo "Executing $nb"
+            jupyter nbconvert \
+              --to notebook \
+              --execute \
+              --inplace \
+              --ExecutePreprocessor.timeout=300 \
+              "$nb"
+          done
+
+      # ----------------------------------------------------------------------
+      # 7. Enforce retention: keep only the 4 most recent per language
+      # ----------------------------------------------------------------------
       - name: Prune old notebooks (keep 4 most recent per language)
         run: |
           for lang in EN ES; do
             dir="Notebook_${lang}/weekly"
             [ -d "$dir" ] || continue
-            # Sort by (year, week) numerically, keep the 4 newest, delete the rest
             ls -1 "$dir"/youtube_charts_*.ipynb 2>/dev/null \
-              | awk -F'[-_/]' '{print $(NF-2), $(NF-1), $0}' \
+              | while read -r f; do
+                  base=$(basename "$f")
+                  y=$(echo "$base" | sed -E 's/^youtube_charts_([0-9]{4})-W([0-9]+)\.ipynb$/\1/')
+                  w=$(echo "$base" | sed -E 's/^youtube_charts_([0-9]{4})-W([0-9]+)\.ipynb$/\2/')
+                  echo "$y $w $f"
+                done \
               | sort -k1,1n -k2,2n -r \
               | awk 'NR>4 {print $3}' \
               | xargs -r rm -f
-            echo "Kept in $dir:"
-            ls -1 "$dir" | tail -10
+            echo "Remaining in $dir:"
+            ls -1 "$dir" || true
           done
 
-      # 7. Commit and push if anything changed
+      # ----------------------------------------------------------------------
+      # 8. Commit and push if anything changed
+      # ----------------------------------------------------------------------
       - name: Commit notebooks
         run: |
           git config user.name  "github-actions[bot]"
