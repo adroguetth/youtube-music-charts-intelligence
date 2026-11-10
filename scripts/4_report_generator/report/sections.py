@@ -19,6 +19,10 @@ Notes
     1. Append its identifier to `WEEKLY_SECTIONS`.
     2. Register its builder in `BUILDERS`.
   The tests in `tests/test_sections.py` assert that both stay in sync.
+- Imports are absolute (`from report.builders import ...`), not relative
+  (`from .builders import ...`). In script mode, `report` is a top-level
+  module on `sys.path`; relative imports raise
+  ``ImportError: attempted relative import beyond top-level package``.
 - When the monthly report arrives (v3.0), `WEEKLY_SECTIONS` will be
   generalised into a `SECTION_SETS` mapping keyed by period kind, and
   `BUILDERS` will grow with the monthly-only builders. No builder that
@@ -33,7 +37,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from .builders import (
+from report.builders import (
     build_collaborations,
     build_countries,
     build_exec_summary,
