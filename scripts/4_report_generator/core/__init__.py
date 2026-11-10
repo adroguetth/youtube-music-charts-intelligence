@@ -15,6 +15,11 @@ Notes
 - No module here imports `nbformat`, `matplotlib` or `streamlit`.
   Notebook assembly lives in `report`. The dashboard (v4.0) will import
   from here, never the other way around.
+- Imports are absolute (`from core.db import ...`), not relative
+  (`from .db import ...`), because `main.py` is executed in script mode
+  and `core` is a top-level module on `sys.path`. Relative imports break
+  with ``ImportError: attempted relative import beyond top-level
+  package`` when a sibling subpackage (`report`) imports from here.
 - Every public symbol is re-exported below so callers can write
   ``from core import Period, load_week, genre_stats`` instead of reaching
   into individual modules.
@@ -26,14 +31,14 @@ Email: adroguett.consultor@gmail.com
 
 from __future__ import annotations
 
-from .db import (
+from core.db import (
     find_week_db,
     latest_week_label,
     load_week,
     parse_db_filename,
     validate_schema,
 )
-from .metrics import (
+from core.metrics import (
     collaborations,
     general_stats,
     genre_stats,
@@ -43,7 +48,7 @@ from .metrics import (
     top_songs_by_country,
     video_metrics,
 )
-from .periods import Period, previous_week, week_from_label
+from core.periods import Period, previous_week, week_from_label
 
 __all__ = [
     # periods
