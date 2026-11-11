@@ -18,17 +18,13 @@ Notes
       parents[0] = 4_report_generator/
       parents[1] = scripts/
       parents[2] = <repo root>
-  A previous version used `parents[3]`, which resolved one level above
-  the repository root and caused `latest_week_label` to search in a
-  directory that does not exist.
+- The output directories use lowercase names (`notebook_en` and
+  `notebook_es`) to match the workflow and the repository structure.
 - The logger is created here and imported by every submodule to guarantee
   a single, consistent output stream. Importing this module multiple
   times does not duplicate handlers.
 - This module contains no business logic. Only paths, logging setup and
   small path helpers.
-- The cache directories are declared even though v1.0 does not use them.
-  They will hold AI-generated insights in v2.0. Declaring them now keeps
-  every output path centralised in one file.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -56,8 +52,8 @@ REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 ARCHIVE_DIR: Path = REPO_ROOT / "charts_archive" / "3_enrich-chart-data"
 
 # Output: notebooks per language
-NOTEBOOK_DIR_EN: Path = REPO_ROOT / "Notebook_EN" / "weekly"
-NOTEBOOK_DIR_ES: Path = REPO_ROOT / "Notebook_ES" / "weekly"
+NOTEBOOK_DIR_EN: Path = REPO_ROOT / "notebook_en" / "weekly"
+NOTEBOOK_DIR_ES: Path = REPO_ROOT / "notebook_es" / "weekly"
 
 # Cache: reserved for v2.0 (AI insights). Declared here so that every
 # output path is centralised in one file.
