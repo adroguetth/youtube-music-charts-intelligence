@@ -401,10 +401,10 @@ def build_countries(df: pd.DataFrame, period, language: str) -> list:
             "plt.tight_layout()\n"
             "plt.show()"
         ),
-        # 4.3 Top 5 Songs by Country
-        new_markdown_cell("### 4.3. Top 5 Songs by Country" if language == "en" else "### 4.3. Top 5 Canciones por País"),
+        # 4.3 Top 5 Songs by Country (LIMITADO A 5 PAÍSES)
+        new_markdown_cell("### 4.3. Top 5 Songs by Top 5 Countries" if language == "en" else "### 4.3. Top 5 Canciones por los 5 Primeros Países"),
         new_code_cell(
-            "top_countries_list = df['artist_country'].value_counts().head(10).index.tolist()\n"
+            "top_countries_list = df['artist_country'].value_counts().head(5).index.tolist()\n"
             "for country in top_countries_list:\n"
             "    display(HTML(f'<hr style=\"border: 1px solid #E5E5E5; margin: 20px 0;\">'))\n"
             "    display(HTML(f'<h4 style=\"color: #0F0F0F; margin-bottom: 10px;\">{country}</h4>'))\n"
@@ -425,7 +425,6 @@ def build_countries(df: pd.DataFrame, period, language: str) -> list:
             "display(HTML(f'<hr style=\"border: 1px solid #E5E5E5; margin: 20px 0;\">'))"
         ),
     ]
-
 
 # ============================================================================
 # SECTION 5 - GENRE ANALYSIS
