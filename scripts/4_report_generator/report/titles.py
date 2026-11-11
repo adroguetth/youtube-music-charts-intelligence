@@ -14,11 +14,13 @@ Notes
   If a new section is added there, add its title here too. A missing key
   raises `KeyError` at build time, which is the desired behaviour: no
   section should ever render without a heading.
-- Titles include the section number (e.g. ``"## 4. General Statistics"``)
-  so the generated notebook has a stable, human-readable table of
-  contents in Jupyter's outline panel.
+- Section numbers are hardcoded in the titles (e.g. "## 4. Country Analysis")
+  and must be kept in sync with `WEEKLY_SECTIONS`. The section ordering is
+  defined in `report.sections`.
+- Sub-sections (e.g. "4.1. Top Countries") are handled directly by the
+  builders as markdown cells, not by this registry, to keep the structure
+  flat and easy to read.
 - This module contains no formatting logic beyond returning strings.
-  Builders consume these strings directly.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -48,29 +50,37 @@ _SECTION_TITLES = {
         "en": "## 2. General Statistics",
         "es": "## 2. Estadísticas Generales",
     },
+    "continents": {
+        "en": "## 3. Continent Analysis",
+        "es": "## 3. Análisis por Continente",
+    },
     "countries": {
-        "en": "## 3. Country Analysis",
-        "es": "## 3. Análisis por País",
+        "en": "## 4. Country Analysis",
+        "es": "## 4. Análisis por País",
     },
     "genre_analysis": {
-        "en": "## 4. Genre Analysis",
-        "es": "## 4. Análisis por Género",
-    },
-    "video_metrics": {
-        "en": "## 5. Video Metrics",
-        "es": "## 5. Métricas de Video",
+        "en": "## 5. Genre Analysis",
+        "es": "## 5. Análisis por Género",
     },
     "top_songs": {
         "en": "## 6. Song Metrics",
         "es": "## 6. Métricas de Canciones",
     },
+    "video_metrics": {
+        "en": "## 7. Video Metrics",
+        "es": "## 7. Métricas de Video",
+    },
+    "temporal_analysis": {
+        "en": "## 8. Temporal Analysis",
+        "es": "## 8. Análisis Temporal",
+    },
     "collaborations": {
-        "en": "## 7. Collaborations Analysis",
-        "es": "## 7. Análisis de Colaboraciones",
+        "en": "## 9. Collaborations Analysis",
+        "es": "## 9. Análisis de Colaboraciones",
     },
     "exec_summary": {
-        "en": "## 8. Executive Summary",
-        "es": "## 8. Resumen Ejecutivo",
+        "en": "## 10. Executive Summary",
+        "es": "## 10. Resumen Ejecutivo",
     },
 }
 
