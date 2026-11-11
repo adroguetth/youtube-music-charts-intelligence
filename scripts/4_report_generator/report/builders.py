@@ -25,14 +25,9 @@ Notes
 - Visual style: Arial/Helvetica font, pure white background, subtle grey
   borders (0.8 width), solid soft red (#FC4B4B) for single-series charts,
   and a standardized categorical palette for multi-series charts.
-- Builders do not aggregate beyond trivial pandas calls. All metrics come
-  from `core.metrics`, so the numbers match across the notebook, the
-  dashboard and any future consumer.
-- Builders do not print or log. They build cells. Logging happens in
-  `main.py`.
-- `SETUP_CODE` contains Python f-strings with `{}` placeholders. It must
-  NOT be processed with `str.format()`. The DB filename is injected with
-  `str.replace("__DB_FILENAME__", ...)` instead.
+- SETUP_CODE defines all metric functions inline to ensure the notebook
+  is self-contained and runs reliably in any environment (CI, Colab, etc.)
+  without requiring the repository to be installed as a package.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -126,16 +121,106 @@ def get_continent(country):
         if country in countries: return continent
     return 'Other'
 
-# Metric functions: try to import, fall back to inline if needed
-try:
-    from core.metrics import (
-        collaborations, general_stats, genre_stats,
-        top_countries, top_countries_by_likes, top_songs,
-        top_songs_by_country, video_metrics,
+# ==============================================================================
+# METRIC FUNCTIONS (Inline for self-containment)
+# ==============================================================================
+def general_stats(df):
+    return {
+        "total_songs": int(len(df)),
+        "unique_countries": int(df["artist_country"].nunique()),
+        "unique_genres": int(df["macro_genre"].nunique()),
+        "total_views": int(df["views"].sum()),
+        "total_likes": int(df["likes"].sum()),
+        "total_comments": int(df["comment_count"].sum()),
+        "avg_views": float(df["views"].mean()),
+        "avg_likes": float(df["likes"].mean()),
+        "avg_engagement": float(df["engagement"].mean()),
+    }
+
+def top_countries(df, n=10):
+    return (
+        df.groupby("artist_country")
+        .agg(total_songs=("rank", "count"), total_views=("views", "sum"))
+        .reset_index()
+        .sort_values("total_songs", ascending=False)
+        .head(n)
+        .reset_index(drop=True)
     )
-except ImportError:
-    # Fallback definitions omitted here for brevity, use standard functions
-    pass
+
+def top_countries_by_likes(df, n=10):
+    return (
+        df.groupby("artist_country")["likes"]
+        .sum()
+        .reset_index()
+        .rename(columns={"likes": "total_likes"})
+        .sort_values("total_likes", ascending=False)
+        .head(n)
+        .reset_index(drop=True)
+    )
+
+def top_songs_by_country(df, country, metric="views", n=5):
+    cols = ["track_name", "artist_names", "views", "likes", "engagement"]
+    return (
+        df[df["artist_country"] == country]
+        .nlargest(n, metric)[cols]
+        .reset_index(drop=True)
+    )
+
+def genre_stats(df):
+    out = (
+        df.groupby("macro_genre")
+        .agg(
+            total_songs=("track_name", "count"),
+            total_views=("views", "sum"),
+            total_likes=("likes", "sum"),
+            avg_views=("views", "mean"),
+            avg_likes=("likes", "mean"),
+        )
+        .reset_index()
+    )
+    out["engagement_rate"] = (
+        out["total_likes"] / out["total_views"].replace(0, pd.NA) * 100
+    ).fillna(0).round(2)
+    return out.sort_values("total_songs", ascending=False).reset_index(drop=True)
+
+def video_metrics(df):
+    flags = {
+        "Official": "is_official_video",
+        "Lyric": "is_lyric_video",
+        "Live": "is_live_performance",
+    }
+    rows = []
+    total = len(df)
+    for label, flag in flags.items():
+        subset = df[df[flag] == 1]
+        rows.append({
+            "video_type": label,
+            "count": int(len(subset)),
+            "pct": float(len(subset) / total * 100) if total else 0.0,
+            "avg_views": float(subset["views"].mean()) if len(subset) else 0.0,
+            "avg_engagement": float(subset["engagement"].mean()) if len(subset) else 0.0,
+        })
+    return pd.DataFrame(rows)
+
+def top_songs(df, metric="views", n=10):
+    cols = ["rank", "track_name", "artist_names", metric, "artist_country"]
+    return df.nlargest(n, metric)[cols].reset_index(drop=True)
+
+def collaborations(df):
+    grouped = (
+        df.groupby("is_collaboration")
+        .agg(
+            count=("track_name", "count"),
+            avg_views=("views", "mean"),
+            avg_engagement=("engagement", "mean"),
+        )
+        .reset_index()
+    )
+    grouped["is_collaboration"] = grouped["is_collaboration"].map(
+        {0: "Solo", 1: "Collaboration"}
+    )
+    return grouped
+
 
 DB_PATH = Path("../../charts_archive/3_enrich-chart-data/__DB_FILENAME__")
 conn = sqlite3.connect(DB_PATH)
