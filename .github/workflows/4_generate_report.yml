@@ -14,7 +14,7 @@
 #   8. Commit and push if anything changed
 #
 # Retention policy: only the 4 most recent notebooks per language are
-# kept under Notebook_EN/weekly/ and Notebook_ES/weekly/. Older ones are
+# kept under notebook_en/weekly/ and notebook_es/weekly/. Older ones are
 # removed before committing, so the repository does not grow unbounded.
 #
 # The generator itself (main.py) does not execute the notebooks; it only
@@ -96,7 +96,7 @@ jobs:
         run: |
           set -e
           shopt -s nullglob
-          notebooks=(Notebook_EN/weekly/*.ipynb Notebook_ES/weekly/*.ipynb)
+          notebooks=(notebook_en/weekly/*.ipynb notebook_es/weekly/*.ipynb)
           if [ ${#notebooks[@]} -eq 0 ]; then
             echo "No notebooks found to execute."
             exit 1
@@ -116,8 +116,8 @@ jobs:
       # ----------------------------------------------------------------------
       - name: Prune old notebooks (keep 4 most recent per language)
         run: |
-          for lang in EN ES; do
-            dir="Notebook_${lang}/weekly"
+          for lang in en es; do
+            dir="notebook_${lang}/weekly"
             [ -d "$dir" ] || continue
             ls -1 "$dir"/youtube_charts_*.ipynb 2>/dev/null \
               | while read -r f; do
@@ -140,7 +140,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Notebook_EN Notebook_ES
+          git add notebook_en notebook_es
           if git diff --cached --quiet; then
             echo "No changes to commit."
           else
