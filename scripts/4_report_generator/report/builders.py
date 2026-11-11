@@ -71,6 +71,7 @@ import seaborn as sns
 import squarify
 
 from scipy.stats import gaussian_kde
+from IPython.display import display, Markdown
 
 plt.rcParams["figure.figsize"] = (12, 6)
 plt.rcParams["font.size"] = 12
