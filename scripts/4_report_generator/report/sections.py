@@ -39,11 +39,13 @@ from typing import Callable
 
 from report.builders import (
     build_collaborations,
+    build_continents,
     build_countries,
     build_exec_summary,
     build_general_stats,
     build_genre_analysis,
     build_intro,
+    build_temporal_analysis,
     build_top_songs,
     build_video_metrics,
 )
@@ -55,10 +57,12 @@ from report.builders import (
 WEEKLY_SECTIONS: list[str] = [
     "intro",
     "general_stats",
+    "continents",
     "countries",
     "genre_analysis",
-    "video_metrics",
     "top_songs",
+    "video_metrics",
+    "temporal_analysis",
     "collaborations",
     "exec_summary",
 ]
@@ -72,10 +76,12 @@ WEEKLY_SECTIONS: list[str] = [
 BUILDERS: dict[str, Callable] = {
     "intro": build_intro,
     "general_stats": build_general_stats,
+    "continents": build_continents,
     "countries": build_countries,
     "genre_analysis": build_genre_analysis,
-    "video_metrics": build_video_metrics,
     "top_songs": build_top_songs,
+    "video_metrics": build_video_metrics,
+    "temporal_analysis": build_temporal_analysis,
     "collaborations": build_collaborations,
     "exec_summary": build_exec_summary,
 }
