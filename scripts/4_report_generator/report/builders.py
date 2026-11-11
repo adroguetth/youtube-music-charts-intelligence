@@ -599,4 +599,219 @@ def build_video_metrics(df: pd.DataFrame, period, language: str) -> list:
             "fig, ax = plt.subplots(figsize=(8, 6))\n"
             "fig.patch.set_facecolor('#F9F9F9')\n"
             "ax.set_facecolor('#F9F9F9')\n"
-            "sns.barplot(data=df_video, x='video_type', y='engagement', ax=ax, color='#FC
+            "sns.barplot(data=df_video, x='video_type', y='engagement', ax=ax, color='#FC4B4C', errorbar='sd')\n"
+            "ax.set_title('Average Engagement by Video Type', fontweight='bold', fontsize=14)\n"
+            "ax.set_ylabel('Engagement (%)', fontsize=12)\n"
+            "ax.set_xlabel('Video Type', fontsize=12)\n"
+            "plt.xticks(rotation=45)\n"
+            "plt.tight_layout()\n"
+            "plt.show()"
+        ),
+        # 7.4 Duration Analysis
+        new_markdown_cell("### 7.4. Duration Analysis" if language == "en" else "### 7.4. Análisis de Duración"),
+        new_code_cell(
+            "duration_minutes = df['duration_s'] / 60\n"
+            "dur_stats = pd.DataFrame({\n"
+            "    'Statistic': ['Average (min)', 'Minimum (s)', 'Maximum (s)', 'Median (s)', 'Q1 (min)', 'Q3 (min)'],\n"
+            "    'Value': [f'{duration_minutes.mean():.1f}', f'{df[\"duration_s\"].min()}', f'{df[\"duration_s\"].max()}', f'{df[\"duration_s\"].median()}', f'{duration_minutes.quantile(0.25):.1f}', f'{duration_minutes.quantile(0.75):.1f}']\n"
+            "})\n"
+            "display(dur_stats)\n"
+            "\n"
+            "fig, axes = plt.subplots(1, 2, figsize=(12, 5))\n"
+            "fig.patch.set_facecolor(YT_BG)\n"
+            "ax1 = axes[0]\n"
+            "ax1.set_facecolor(YT_SURFACE)\n"
+            "n, bins, patches = ax1.hist(duration_minutes, bins=15, edgecolor='white', alpha=0.7, density=True)\n"
+            "for patch in patches:\n"
+            "    patch.set_facecolor('#FE1B1F' if patch.get_height() > 0.2 else '#D8A7A7')\n"
+            "kde = gaussian_kde(duration_minutes)\n"
+            "x = np.linspace(duration_minutes.min(), duration_minutes.max(), 100)\n"
+            "ax1.plot(x, kde(x), color=YT_RED_DARK, linewidth=2.5, label='Density', alpha=0.9)\n"
+            "ax1.axvline(duration_minutes.mean(), color='#220F23', linestyle='--', linewidth=1.5, label=f'Mean: {duration_minutes.mean():.1f} min')\n"
+            "ax1.axvline(duration_minutes.median(), color='#821638', linestyle='--', linewidth=1.5, label=f'Median: {duration_minutes.median():.1f} min')\n"
+            "ax1.set_xlabel('Duration (minutes)', fontsize=10, color=YT_GRAY)\n"
+            "ax1.set_ylabel('Density', fontsize=10, color=YT_GRAY)\n"
+            "ax1.set_title('Duration Distribution', fontweight='bold', color=YT_TEXT, fontsize=12)\n"
+            "ax1.legend(loc='upper right', fontsize=9, facecolor=YT_SURFACE)\n"
+            "ax1.spines[['top', 'right']].set_visible(False)\n"
+            "ax1.grid(True, color=YT_GRID, linestyle='--', alpha=0.5)\n"
+            "ax2 = axes[1]\n"
+            "ax2.set_facecolor(YT_SURFACE)\n"
+            "bp = ax2.boxplot(duration_minutes, vert=False, patch_artist=True, widths=0.6,\n"
+            "                 boxprops=dict(facecolor=YT_RED, color=YT_RED_DARK, alpha=0.7),\n"
+            "                 whiskerprops=dict(color=YT_GRAY), capprops=dict(color=YT_GRAY),\n"
+            "                 medianprops=dict(color='white', linewidth=2),\n"
+            "                 flierprops=dict(marker='o', markerfacecolor=YT_RED, markersize=4, alpha=0.5))\n"
+            "ax2.set_yticks([1])\n"
+            "ax2.set_yticklabels(['Duration'], fontsize=10)\n"
+            "ax2.set_xlabel('Duration (minutes)', fontsize=10, color=YT_GRAY)\n"
+            "ax2.set_title('Key Statistics', fontweight='bold', color=YT_TEXT, fontsize=12)\n"
+            "ax2.spines[['top', 'right']].set_visible(False)\n"
+            "ax2.grid(True, color=YT_GRID, linestyle='--', alpha=0.5, axis='x')\n"
+            "plt.tight_layout()\n"
+            "plt.show()"
+        ),
+        # 7.5 Channel Type Distribution
+        new_markdown_cell("### 7.5. Channel Type Distribution" if language == "en" else "### 7.5. Distribución por Tipo de Canal"),
+        new_code_cell(
+            "channel_counts = df['channel_type'].value_counts()\n"
+            "ch_df = pd.DataFrame({'Channel Type': channel_counts.index, 'Count': channel_counts.values})\n"
+            "ch_df['Percentage'] = (ch_df['Count'] / len(df) * 100).round(1).astype(str) + '%'\n"
+            "display(ch_df)\n"
+            "\n"
+            "fig, ax = plt.subplots(figsize=(10, 5))\n"
+            "fig.patch.set_facecolor(YT_BG)\n"
+            "ax.set_facecolor(YT_SURFACE)\n"
+            "colors = plt.cm.Reds(np.linspace(0.4, 0.9, len(channel_counts)))[::-1]\n"
+            "bars = ax.barh(channel_counts.index, channel_counts.values, color=colors, edgecolor='none', height=0.6, alpha=0.9)\n"
+            "ax.set_xlabel('Number of Songs', fontsize=11, color=YT_GRAY)\n"
+            "ax.set_title('Channel Type Distribution', fontweight='bold', color=YT_TEXT, fontsize=14)\n"
+            "ax.spines[['top', 'right', 'left']].set_visible(False)\n"
+            "ax.spines['bottom'].set_color(YT_GRID)\n"
+            "ax.xaxis.grid(True, color=YT_GRID, linestyle='--', alpha=0.7)\n"
+            "for bar, val in zip(bars, channel_counts.values):\n"
+            "    ax.text(val + 0.3, bar.get_y() + bar.get_height()/2, f'{val} ({val/len(df)*100:.1f}%)', va='center', fontsize=10, fontweight='bold', color=YT_TEXT)\n"
+            "plt.tight_layout()\n"
+            "plt.show()"
+        ),
+    ]
+
+
+# ============================================================================
+# SECTION 8 - TEMPORAL ANALYSIS
+# ============================================================================
+def build_temporal_analysis(df: pd.DataFrame, period, language: str) -> list:
+    """Temporal section: views and engagement by quarter (bar charts)."""
+    return [
+        new_markdown_cell(section_title("temporal_analysis", language)),
+        new_code_cell(
+            "bg_color = '#F9F9F9'\n"
+            "genre_palette = ['#751924', '#FF0000', '#282828', '#FFB347', '#FF6B6B']\n"
+            "top5_genres = genre_stats.nlargest(5, 'total_songs')['macro_genre'].tolist()\n"
+            "df_temporal = df[df['macro_genre'].isin(top5_genres)].copy()\n"
+            "temporal_views = df_temporal.groupby(['upload_quarter', 'macro_genre'])['views'].sum().reset_index()\n"
+            "temporal_engagement = df_temporal.groupby(['upload_quarter', 'macro_genre'])['engagement'].mean().reset_index()"
+        ),
+        # 8.1 Views Evolution
+        new_markdown_cell("### 8.1. Views Evolution by Quarter" if language == "en" else "### 8.1. Evolución de Vistas por Trimestre"),
+        new_code_cell(
+            "fig1, ax1 = plt.subplots(figsize=(12, 6), facecolor=bg_color)\n"
+            "ax1.set_facecolor(bg_color)\n"
+            "sns.barplot(data=temporal_views, x='upload_quarter', y='views', hue='macro_genre', palette=genre_palette, ax=ax1)\n"
+            "ax1.set_title('Views Evolution by Quarter (Top 5 Genres)', fontweight='bold', color='#282828', fontsize=14)\n"
+            "ax1.set_xlabel('Release Quarter', color='#282828', fontsize=12)\n"
+            "ax1.set_ylabel('Total Views', color='#282828', fontsize=12)\n"
+            "ax1.tick_params(colors='#282828', labelsize=10)\n"
+            "ax1.spines['top'].set_visible(False)\n"
+            "ax1.spines['right'].set_visible(False)\n"
+            "ax1.spines['left'].set_color('#4A4A4A')\n"
+            "ax1.spines['bottom'].set_color('#4A4A4A')\n"
+            "ax1.grid(True, linestyle='--', alpha=0.3, color='#AAAAAA')\n"
+            "legend1 = ax1.get_legend()\n"
+            "if legend1:\n"
+            "    legend1.get_frame().set_facecolor(bg_color)\n"
+            "    legend1.get_frame().set_edgecolor('#E5E5E5')\n"
+            "    for text in legend1.get_texts(): text.set_color('#282828')\n"
+            "plt.tight_layout()\n"
+            "plt.show()"
+        ),
+        # 8.2 Engagement Evolution
+        new_markdown_cell("### 8.2. Engagement Evolution by Quarter" if language == "en" else "### 8.2. Evolución del Engagement por Trimestre"),
+        new_code_cell(
+            "fig2, ax2 = plt.subplots(figsize=(12, 6), facecolor=bg_color)\n"
+            "ax2.set_facecolor(bg_color)\n"
+            "sns.barplot(data=temporal_engagement, x='upload_quarter', y='engagement', hue='macro_genre', palette=genre_palette, ax=ax2)\n"
+            "ax2.set_title('Engagement Evolution by Quarter (Top 5 Genres)', fontweight='bold', color='#282828', fontsize=14)\n"
+            "ax2.set_xlabel('Release Quarter', color='#282828', fontsize=12)\n"
+            "ax2.set_ylabel('Engagement (%)', color='#282828', fontsize=12)\n"
+            "ax2.tick_params(colors='#282828', labelsize=10)\n"
+            "ax2.spines['top'].set_visible(False)\n"
+            "ax2.spines['right'].set_visible(False)\n"
+            "ax2.spines['left'].set_color('#4A4A4A')\n"
+            "ax2.spines['bottom'].set_color('#4A4A4A')\n"
+            "ax2.grid(True, linestyle='--', alpha=0.3, color='#AAAAAA')\n"
+            "legend2 = ax2.get_legend()\n"
+            "if legend2:\n"
+            "    legend2.get_frame().set_facecolor(bg_color)\n"
+            "    legend2.get_frame().set_edgecolor('#E5E5E5')\n"
+            "    for text in legend2.get_texts(): text.set_color('#282828')\n"
+            "plt.tight_layout()\n"
+            "plt.show()"
+        ),
+        # 8.3 Release Distribution
+        new_markdown_cell("### 8.3. Release Distribution by Quarter" if language == "en" else "### 8.3. Distribución de Lanzamientos por Trimestre"),
+        new_code_cell(
+            "season_counts = df['upload_quarter'].value_counts().sort_index()\n"
+            "fig, ax = plt.subplots(figsize=(8, 5))\n"
+            "fig.patch.set_facecolor(YT_BG)\n"
+            "ax.set_facecolor(YT_SURFACE)\n"
+            "bars = ax.bar(season_counts.index, season_counts.values, color='#FC4B4C', edgecolor='none')\n"
+            "ax.set_xlabel('Quarter', fontsize=11, color=YT_GRAY)\n"
+            "ax.set_ylabel('Number of Songs', fontsize=11, color=YT_GRAY)\n"
+            "ax.set_title('Release Distribution by Quarter', fontweight='bold', color=YT_TEXT)\n"
+            "ax.spines[['top', 'right']].set_visible(False)\n"
+            "ax.spines['bottom'].set_color(YT_GRID)\n"
+            "ax.spines['left'].set_color(YT_GRID)\n"
+            "ax.grid(True, color=YT_GRID, linestyle='--', alpha=0.5)\n"
+            "for bar in bars:\n"
+            "    height = bar.get_height()\n"
+            "    ax.text(bar.get_x() + bar.get_width()/2., height + 0.5, f'{int(height)}', ha='center', va='bottom', fontweight='bold')\n"
+            "plt.tight_layout()\n"
+            "plt.show()"
+        ),
+    ]
+
+
+# ============================================================================
+# SECTION 9 - COLLABORATIONS
+# ============================================================================
+def build_collaborations(df: pd.DataFrame, period, language: str) -> list:
+    """Collaborations section: solo vs collab table and boxplots."""
+    return [
+        new_markdown_cell(section_title("collaborations", language)),
+        new_code_cell(
+            "collab_stats = df.groupby('is_collaboration').agg(\n"
+            "    count=('track_name', 'count'),\n"
+            "    avg_views=('views', 'mean'),\n"
+            "    avg_engagement=('engagement', 'mean')\n"
+            ").reset_index()\n"
+            "collab_stats['is_collaboration'] = collab_stats['is_collaboration'].map({0: 'Solo', 1: 'Collaboration'})\n"
+            "collab_stats['avg_views'] = collab_stats['avg_views'].apply(lambda x: f'{x:,.0f}')\n"
+            "collab_stats['avg_engagement'] = collab_stats['avg_engagement'].round(2).astype(str) + '%'\n"
+            "display(collab_stats)\n"
+            "\n"
+            "fig, axes = plt.subplots(1, 2, figsize=(14, 6))\n"
+            "fig.patch.set_facecolor('#F9F9F9')\n"
+            "axes[0].set_facecolor('#F9F9F9')\n"
+            "axes[1].set_facecolor('#F9F9F9')\n"
+            "sns.boxplot(data=df, x='artist_count', y='views', hue='is_collaboration', palette={0: '#282828', 1: 'red'}, ax=axes[0])\n"
+            "axes[0].set_title('Views vs Number of Artists', fontweight='bold')\n"
+            "axes[0].set_xlabel('Number of Artists')\n"
+            "axes[0].set_ylabel('Views')\n"
+            "sns.boxplot(data=df, x='artist_count', y='engagement', hue='is_collaboration', palette={0: '#282828', 1: 'red'}, ax=axes[1])\n"
+            "axes[1].set_title('Engagement vs Number of Artists', fontweight='bold')\n"
+            "axes[1].set_xlabel('Number of Artists')\n"
+            "axes[1].set_ylabel('Engagement (%)')\n"
+            "plt.tight_layout()\n"
+            "plt.show()"
+        ),
+    ]
+
+
+# ============================================================================
+# SECTION 10 - EXECUTIVE SUMMARY
+# ============================================================================
+def build_exec_summary(df: pd.DataFrame, period, language: str) -> list:
+    """Executive summary section. AI text in v2.0; numeric recap in v1.0."""
+    return [
+        new_markdown_cell(section_title("exec_summary", language)),
+        new_code_cell(
+            "stats = general_stats(df)\n"
+            "print(f\"Songs: {stats['total_songs']}\")\n"
+            "print(f\"Countries: {stats['unique_countries']}\")\n"
+            "print(f\"Genres: {stats['unique_genres']}\")\n"
+            "print(f\"Total views: {format_number(stats['total_views'])}\")\n"
+            "print(f\"Total likes: {format_number(stats['total_likes'])}\")\n"
+            "print(f\"Avg engagement: {stats['avg_engagement']:.2f}%\")"
+        ),
+    ]
