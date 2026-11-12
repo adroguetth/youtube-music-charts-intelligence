@@ -17,6 +17,7 @@ Notes
 - Uses `style_axes` and `add_bar_labels` from the notebook's SETUP_CODE.
 - Uses Matplotlib's native `ax.barh` instead of `sns.barplot` to guarantee
   solid colors (Seaborn sometimes applies unwanted gradients).
+- The histogram uses `alpha=1.0` to prevent color blending with the white background.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -94,7 +95,6 @@ def build_video_metrics(df: pd.DataFrame, period, language: str) -> list:
             "fig, ax = plt.subplots(figsize=(10, 5))\n"
             "fig.patch.set_facecolor(YT_BG); ax.set_facecolor(YT_BG)\n"
             "\n"
-            "# Usamos Matplotlib nativo para garantizar el color sólido\n"
             "bars = ax.barh(views_stats['video_type'], views_stats['avg_views'], color=YT_RED, edgecolor='none', height=BAR_HEIGHT)\n"
             "\n"
             "ax.set_title('Average Views by Video Type', fontsize=TITLE_FONT_SIZE, color=YT_TEXT, loc='center', pad=20)\n"
@@ -123,7 +123,6 @@ def build_video_metrics(df: pd.DataFrame, period, language: str) -> list:
             "fig, ax = plt.subplots(figsize=(10, 5))\n"
             "fig.patch.set_facecolor(YT_BG); ax.set_facecolor(YT_BG)\n"
             "\n"
-            "# Usamos Matplotlib nativo para garantizar el color sólido\n"
             "bars = ax.barh(engagement_by_type['Video Type'], engagement_by_type['Avg Engagement (%)'], color=YT_RED, edgecolor='none', height=BAR_HEIGHT)\n"
             "\n"
             "ax.set_title('Average Engagement by Video Type', fontsize=TITLE_FONT_SIZE, color=YT_TEXT, loc='center', pad=20)\n"
@@ -158,7 +157,8 @@ def build_video_metrics(df: pd.DataFrame, period, language: str) -> list:
             "# Histogram\n"
             "ax1 = axes[0]\n"
             "ax1.set_facecolor(YT_BG)\n"
-            "n, bins, patches = ax1.hist(duration_minutes, bins=15, edgecolor='white', alpha=0.8, density=True, color=YT_RED)\n"
+            "# ALPHA=1.0 para que el color sea exactamente YT_RED sin mezclarse con el fondo\n"
+            "n, bins, patches = ax1.hist(duration_minutes, bins=15, edgecolor='white', alpha=1.0, density=True, color=YT_RED)\n"
             "kde = gaussian_kde(duration_minutes)\n"
             "x = np.linspace(duration_minutes.min(), duration_minutes.max(), 100)\n"
             "ax1.plot(x, kde(x), color=YT_DARK_GREY, linewidth=2, label='Density')\n"
