@@ -2,7 +2,7 @@
 # Script 1: Download YouTube Charts (Playwright + SQLite)
 # ============================================================
 playwright>=1.61.0
-pandas==2.2.3
+pandas>=2.2.3
 
 # ============================================================
 # Script 2.1: Artist Country + Genre Detection (Modular)
@@ -14,8 +14,7 @@ groq>=0.12.0
 # ============================================================
 # Script 2.2: Song Catalog Builder
 # ============================================================
-# (Uses Python standard library only: sqlite3, pathlib, re, datetime, collections)
-# No external dependencies required.
+# (Uses Python standard library only)
 
 # ============================================================
 # Script 3: YouTube Chart Enrichment (3-layer fallback)
@@ -27,26 +26,26 @@ selenium==4.27.1
 webdriver-manager==4.0.2
 
 # ============================================================
-# Script 4: Report Generator (Quarto + Visualizations + AI)
+# Script 4: Report Generator
 # ============================================================
-# Quarto is installed at the system level in GitHub Actions, not via pip.
-matplotlib==3.10.1
-seaborn==0.13.2
-squarify==0.4.4
-scipy==1.15.2
-numpy==2.2.4
-requests==2.32.3
+matplotlib>=3.10.1
+seaborn>=0.13.2
+squarify==0.4.5
+scipy>=1.15.2
+numpy>=2.2.4
+requests>=2.32.3
+nbformat>=5.10.4
+tabulate>=0.9.0 
+jupyter
+nbconvert
 
 # ============================================================
 # Script 5: Export to Google Drive (Optional Future)
 # ============================================================
-# (PDF generation is handled natively by Quarto, no extra libraries needed)
 google-auth-httplib2==0.2.0
 google-auth-oauthlib==1.2.1
 
 # ============================================================
 # Shared / Optional
 # ============================================================
-# For potential future enhancements
-# tqdm==4.67.1  # Progress bars (optional)
-# pytest==8.3.5  # Testing (optional)
+pytest>=8.3.5
