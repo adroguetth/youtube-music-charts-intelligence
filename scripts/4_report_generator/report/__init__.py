@@ -8,6 +8,7 @@ Responsibilities
 - Declare the ordered list of report sections (`sections`).
 - Provide the section titles in English and Spanish (`titles`).
 - Provide one cell builder per section (`builders`).
+- Provide the notebook setup cell (`setup`).
 - Assemble and write the final `.ipynb` file (`notebook`).
 
 Notes
@@ -19,16 +20,13 @@ Notes
   (`from .x import ...`), because `main.py` is executed in script mode
   and `report` is a top-level module on `sys.path`.
 - `BUILDERS` is defined in `report.sections` (the registry that wires
-  section ids to builder functions), not in `report.builders` (which
-  only defines the individual `build_*` functions). Import it from
-  `report.sections`.
+  section ids to builder functions). The individual builders live in
+  the `report.builders` package.
+- The `build_setup` function lives in `report.setup` because it is not a
+  report section; it is prepended to the notebook before the first section.
 - Builders return `nbformat` cells. They do not print, log, or write
   files. All I/O happens in `notebook.generate_notebook` and in
   `main.py`.
-- In v2.0, AI-generated insights will be injected between a section's
-  cells and the next section's header. That injection point lives in
-  `notebook.generate_notebook` via an optional `insights` parameter, so
-  no builder needs to change.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -39,11 +37,13 @@ from __future__ import annotations
 
 from report.notebook import generate_notebook
 from report.sections import BUILDERS, WEEKLY_SECTIONS
+from report.setup import build_setup
 from report.titles import section_title
 
 __all__ = [
     "BUILDERS",
     "WEEKLY_SECTIONS",
+    "build_setup",
     "generate_notebook",
     "section_title",
 ]
