@@ -6,6 +6,7 @@ Builds the first code cell of the notebook. This cell is responsible for:
     - Configuring global visual parameters (fonts, sizes) from `theme.py`.
     - Defining helper functions for formatting and continent mapping.
     - Defining metric functions inline to ensure the notebook is self-contained.
+    - Defining visual helpers (`style_axes`, `add_bar_labels`).
     - Loading the enriched database into a DataFrame.
 
 Notes
@@ -78,6 +79,9 @@ CATEGORICAL_PALETTE = __THEME_CATEGORICAL_PALETTE__
 # Format global to avoid scientific notation in DataFrames
 pd.set_option('display.float_format', lambda x: f'{x:,.3f}')
 
+# ==============================================================================
+# HELPER FUNCTIONS
+# ==============================================================================
 def format_number(x):
     if pd.isna(x): return "N/A"
     if x >= 1_000_000_000: return f"{x / 1_000_000_000:.1f}B"
@@ -89,6 +93,32 @@ def format_axis_millions(x, pos):
     if x >= 1_000_000: return f'{x/1_000_000:.0f}M'
     if x >= 1_000: return f'{x/1_000:.0f}K'
     return f'{x:.0f}'
+
+def style_axes(ax, grid_axis='y'):
+    for spine in ax.spines.values():
+        spine.set_color(BORDER_COLOR)
+        spine.set_linewidth(0.8)
+    ax.tick_params(colors=YT_TEXT, labelsize=11)
+    if grid_axis == "y":
+        ax.yaxis.grid(True, color=YT_GRID, linestyle=GRID_STYLE, alpha=GRID_ALPHA)
+        ax.xaxis.grid(False)
+    else:
+        ax.xaxis.grid(True, color=YT_GRID, linestyle=GRID_STYLE, alpha=GRID_ALPHA)
+        ax.yaxis.grid(False)
+
+def add_bar_labels(ax, fmt="{:.0f}", suffix="", horizontal=True):
+    if horizontal:
+        for p in ax.patches:
+            width = p.get_width()
+            if width == 0: continue
+            ax.text(width + (width * 0.02), p.get_y() + p.get_height() / 2,
+                    f"{fmt.format(width)}{suffix}", ha='left', va='center', fontsize=11, color=YT_TEXT)
+    else:
+        for p in ax.patches:
+            height = p.get_height()
+            if height == 0: continue
+            ax.text(p.get_x() + p.get_width() / 2, height + (height * 0.02),
+                    f"{fmt.format(height)}{suffix}", ha='center', va='bottom', fontsize=11, color=YT_TEXT)
 
 def get_continent(country):
     continents = {
