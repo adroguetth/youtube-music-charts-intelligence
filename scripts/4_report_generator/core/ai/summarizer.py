@@ -32,20 +32,31 @@ import requests
 # ============================================================================
 # PROMPT TEMPLATES
 # ============================================================================
+# ============================================================================
+# PROMPT TEMPLATES
+# ============================================================================
 PROMPTS = {
     "es": (
-        "Eres un analista experto en la industria musical. "
-        "Lee la siguiente tabla de datos en formato Markdown:\n\n"
+        "Actúa como un analista de datos experto en la industria musical. "
+        "A continuación, recibirás una tabla en formato Markdown:\n\n"
         "{table}\n\n"
-        "Escribe un resumen conciso de 5 líneas destacando las estadísticas más importantes, "
-        "los líderes y cualquier tendencia notable. No inventes datos, usa solo lo que está en la tabla."
+        "Tu objetivo es extraer la información clave para que un periodista redacte un artículo. "
+        "Sigue estas reglas estrictas:\n"
+        "1. Escribe un texto continuo de máximo 4 oraciones (no uses viñetas, listas ni negritas).\n"
+        "2. Menciona explícitamente el líder de la tabla (con su cifra exacta).\n"
+        "3. Destaca la tendencia general o el dato más sorprendente (ej. caídas abruptas, empates, márgenes amplios).\n"
+        "4. Usa exclusivamente los datos numéricos que aparecen en la tabla. No inventes ni extrapoles."
     ),
     "en": (
-        "You are an expert music industry analyst. "
-        "Read the following data table in Markdown format:\n\n"
+        "Act as an expert music data analyst. "
+        "You will receive a data table in Markdown format:\n\n"
         "{table}\n\n"
-        "Write a concise 5-line summary highlighting the most important statistics, "
-        "the leaders, and any notable trends. Do not hallucinate data, use only what is in the table."
+        "Your goal is to extract the key information so a journalist can write an article. "
+        "Follow these strict rules:\n"
+        "1. Write a continuous text of maximum 4 sentences (do not use bullet points, lists, or bold text).\n"
+        "2. Explicitly mention the table leader (with the exact number).\n"
+        "3. Highlight the general trend or the most surprising data point (e.g., abrupt drops, ties, wide margins).\n"
+        "4. Use ONLY the numerical data provided in the table. Do not invent or extrapolate."
     )
 }
 
@@ -96,7 +107,7 @@ class TableSummarizer:
 
         prompt = PROMPTS.get(language, PROMPTS["es"]).format(table=table_markdown)
         
-        # URL de la API de Google Gemini/Gemma (ajustar según el endpoint exacto de Google AI Studio)
+        # Google Gemini/Gemma API endpoint (adjust according to Google AI Studio docs)
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent?key={self.google_api_key}"
         
         try:
@@ -112,7 +123,7 @@ class TableSummarizer:
             data = response.json()
             
             summary = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            # Google no siempre devuelve el uso exacto de tokens, pero podemos estimarlo
+            # Google does not always return exact token usage, but we can estimate it
             tokens_used = data.get("usageMetadata", {}).get("totalTokenCount", 0)
             
             return summary, tokens_used
@@ -144,7 +155,7 @@ class TableSummarizer:
             if summary:
                 return summary, "groq_gpt_oss", tokens
             else:
-                # Si Groq falló (por ejemplo, por límite de cuota), intentamos con Google
+                # If Groq failed (e.g., quota limit), try Google as fallback
                 print("   [Summarizer] Groq failed or returned empty. Trying Google Gemma as fallback...")
                 summary, tokens = self._summarize_with_google(table_markdown, language)
                 if summary:
@@ -155,5 +166,5 @@ class TableSummarizer:
             if summary:
                 return summary, "google_gemma", tokens
         
-        # Si llegamos aquí, ambos fallaron o el modelo no estaba disponible
+        # If we reach this point, both failed or the model was unavailable
         return "", model_name, 0
