@@ -1,5 +1,5 @@
 """
-Configuration - Paths, Logger and Language Helpers
+Configuration - Paths, Logger and Environment Flags
 ============================================================================
 Centralised configuration for the `4_report_generator` package.
 
@@ -8,6 +8,7 @@ Responsibilities
 - Resolve repository paths (archive dir, notebook outputs, caches).
 - Configure a package-level logger with a consistent output format.
 - Provide helpers to resolve language-specific directories.
+- Load environment variables for AI services (Groq, Google, DeepSeek).
 
 Notes
 -----
@@ -18,13 +19,10 @@ Notes
       parents[0] = 4_report_generator/
       parents[1] = scripts/
       parents[2] = <repo root>
-- The output directories use lowercase names (`notebook_en` and
-  `notebook_es`) to match the workflow and the repository structure.
-- The logger is created here and imported by every submodule to guarantee
-  a single, consistent output stream. Importing this module multiple
-  times does not duplicate handlers.
-- This module contains no business logic. Only paths, logging setup and
-  small path helpers.
+- API keys are read from environment variables. If they are not set, the
+  AI generation will be skipped gracefully (the report will still be
+  generated with charts and tables).
+- The `ai_budget.json` file lives at the root of the repository.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -34,6 +32,7 @@ Email: adroguett.consultor@gmail.com
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 # ============================================================================
@@ -55,10 +54,18 @@ ARCHIVE_DIR: Path = REPO_ROOT / "charts_archive" / "3_enrich-chart-data"
 NOTEBOOK_DIR_EN: Path = REPO_ROOT / "notebook_en" / "weekly"
 NOTEBOOK_DIR_ES: Path = REPO_ROOT / "notebook_es" / "weekly"
 
-# Cache: reserved for v2.0 (AI insights). Declared here so that every
-# output path is centralised in one file.
-CACHE_DIR_EN: Path = NOTEBOOK_DIR_EN / "cache"
-CACHE_DIR_ES: Path = NOTEBOOK_DIR_ES / "cache"
+# Cache for AI responses
+CACHE_AI_DIR: Path = REPO_ROOT / "cache_ai"
+
+# AI Budget file
+AI_BUDGET_FILE: Path = REPO_ROOT / "ai_budget.json"
+
+# ============================================================================
+# AI ENVIRONMENT VARIABLES
+# ============================================================================
+GROQ_API_KEY: str | None = os.environ.get("GROQ_API_KEY")
+GOOGLE_API_KEY: str | None = os.environ.get("GOOGLE_API_KEY")
+DEEPSEEK_API_KEY: str | None = os.environ.get("DEEPSEEK_API_KEY")
 
 # ============================================================================
 # LOGGER
@@ -97,30 +104,4 @@ def notebook_dir(language: str) -> Path:
         return NOTEBOOK_DIR_EN
     if language == "es":
         return NOTEBOOK_DIR_ES
-    raise ValueError(f"Unsupported language: {language}")
-
-
-def cache_dir(language: str) -> Path:
-    """
-    Return the cache directory for a given language.
-
-    Parameters
-    ----------
-    language : str
-        ``"en"`` or ``"es"``.
-
-    Returns
-    -------
-    Path
-        Directory reserved for cached artifacts (AI insights in v2.0).
-
-    Raises
-    ------
-    ValueError
-        If `language` is not supported.
-    """
-    if language == "en":
-        return CACHE_DIR_EN
-    if language == "es":
-        return CACHE_DIR_ES
     raise ValueError(f"Unsupported language: {language}")
