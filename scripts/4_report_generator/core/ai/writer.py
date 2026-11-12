@@ -32,20 +32,28 @@ import requests
 # ============================================================================
 WRITER_PROMPTS = {
     "es": (
-        "Eres un periodista experto en la industria musical y creador de contenido. "
-        "Tengo este resumen de datos crudos de la semana:\n\n"
+        "Actúa como un periodista de datos musicales de élite, escribiendo para una revista como Billboard o Rolling Stone. "
+        "A continuación, te presento un resumen estadístico crudo de la semana:\n\n"
         "{summary}\n\n"
-        "Tu tarea es reescribirlo para que sea un párrafo analítico, atractivo y profesional de 3 a 4 líneas. "
-        "No inventes nuevas estadísticas, usa solo los datos del resumen. "
-        "Manten un tono informativo y persuasivo, como si escribirieras para una revista de música."
+        "Tu tarea es redactar un único párrafo analítico, atractivo y profesional (máximo 4 líneas). "
+        "Reglas estrictas:\n"
+        "1. Cero alucinaciones: Usa únicamente las cifras exactas que aparecen en el resumen.\n"
+        "2. No uses viñetas, listas ni saltos de línea.\n"
+        "3. No uses introducciones genéricas como 'Aquí tienes el análisis' o 'En resumen'. Ve directo al grano.\n"
+        "4. Comienza con un 'hook' (gancho) periodístico que destaque la tendencia o el dato más sorprendente.\n"
+        "5. Mantén un tono dinámico, informativo y persuasivo, como si cerraras un artículo de portada."
     ),
     "en": (
-        "You are an expert music industry journalist and content creator. "
-        "I have this raw data summary for the week:\n\n"
+        "Act as an elite music data journalist writing for a top-tier publication like Billboard or Rolling Stone. "
+        "Here is a raw statistical summary for the week:\n\n"
         "{summary}\n\n"
-        "Your task is to rewrite it into a compelling, professional 3 to 4-line analytical paragraph. "
-        "Do not invent new statistics, use only the data from the summary. "
-        "Keep an informative and persuasive tone, as if writing for a music magazine."
+        "Your task is to write a single, compelling, and professional analytical paragraph (maximum 4 lines). "
+        "Strict rules:\n"
+        "1. Zero hallucinations: Use ONLY the exact numbers provided in the summary.\n"
+        "2. Do not use bullet points, lists, or line breaks.\n"
+        "3. No generic introductory fluff like 'Here is the analysis' or 'In summary'. Get straight to the point.\n"
+        "4. Start with a journalistic hook highlighting the most surprising trend or data point.\n"
+        "5. Keep a dynamic, informative, and persuasive tone, as if closing a cover story."
     )
 }
 
