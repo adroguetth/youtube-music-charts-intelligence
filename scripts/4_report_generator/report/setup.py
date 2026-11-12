@@ -64,7 +64,12 @@ YT_TEXT = "__THEME_YT_TEXT__"
 YT_GRAY = "__THEME_YT_GRAY__"
 YT_GRID = "__THEME_YT_GRID__"
 YT_BG = "__THEME_YT_BG__"
+
+# Style variables
 BORDER_COLOR = "__THEME_BORDER_COLOR__"
+BAR_HEIGHT = __THEME_BAR_HEIGHT__
+GRID_STYLE = __THEME_GRID_STYLE__
+GRID_ALPHA = __THEME_GRID_ALPHA__
 
 # Categorical palette for multi-series charts
 CATEGORICAL_PALETTE = __THEME_CATEGORICAL_PALETTE__
@@ -250,6 +255,9 @@ def build_setup(period, language: str) -> list:
         "__THEME_YT_GRID__": theme.YT_GRID,
         "__THEME_YT_BG__": theme.YT_BG,
         "__THEME_BORDER_COLOR__": theme.BORDER_COLOR,
+        "__THEME_BAR_HEIGHT__": str(theme.BAR_HEIGHT),
+        "__THEME_GRID_STYLE__": repr(theme.GRID_STYLE),
+        "__THEME_GRID_ALPHA__": str(theme.GRID_ALPHA),
         "__THEME_CATEGORICAL_PALETTE__": repr(theme.CATEGORICAL_PALETTE),
         "__DB_FILENAME__": f"youtube_charts_{period.label}_enriched.db",
     }
