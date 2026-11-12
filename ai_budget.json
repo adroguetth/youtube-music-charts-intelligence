@@ -1,0 +1,24 @@
+{
+  "last_updated": "2026-11-12T00:00:00Z",
+  "status": {
+    "consecutive_successes": 0,
+    "consecutive_failures": 0
+  },
+  "models": {
+    "groq_gpt_oss": {
+      "tokens_remaining": 200000,
+      "max_daily_limit": 200000,
+      "priority": 1
+    },
+    "google_gemma": {
+      "tokens_remaining": 1500000,
+      "max_daily_limit": 1500000,
+      "priority": 2
+    },
+    "deepseek_writer": {
+      "tokens_remaining": 500000,
+      "max_daily_limit": 500000,
+      "priority": 3
+    }
+  }
+}
