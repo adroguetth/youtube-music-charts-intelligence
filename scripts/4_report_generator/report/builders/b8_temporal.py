@@ -68,7 +68,7 @@ def build_temporal_analysis(df: pd.DataFrame, period, language: str) -> list:
             "fig1, ax1 = plt.subplots(figsize=(12, 6))\n"
             "fig1.patch.set_facecolor(YT_BG); ax1.set_facecolor(YT_BG)\n"
             "\n"
-            "# We use the CATEGORICAL_PALETTE to distinguish genres\n"
+            "# Se usa CATEGORICAL_PALETTE para distinguir los géneros\n"
             "sns.barplot(data=temporal_views, x='upload_quarter', y='views', hue='macro_genre', palette=CATEGORICAL_PALETTE, ax=ax1)\n"
             "\n"
             "ax1.set_title('Views Evolution by Quarter (Top 5 Genres)', fontsize=TITLE_FONT_SIZE, color=YT_TEXT, loc='center', pad=20)\n"
