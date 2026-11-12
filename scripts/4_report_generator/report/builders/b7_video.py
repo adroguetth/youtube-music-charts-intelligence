@@ -14,9 +14,11 @@ Responsibilities
 
 Notes
 -----
-- Uses `style_axes` and `add_bar_labels` from `common.py`.
+- Uses `style_axes` and `add_bar_labels` from the notebook's SETUP_CODE.
 - Uses theme colors to maintain visual consistency.
 - The duration analysis uses a Gaussian KDE overlaid on the histogram.
+- To avoid Seaborn's automatic gradient, we force a single-color palette
+  with `palette=[YT_RED]` in all `sns.barplot` calls.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -94,7 +96,8 @@ def build_video_metrics(df: pd.DataFrame, period, language: str) -> list:
             "fig, ax = plt.subplots(figsize=(10, 5))\n"
             "fig.patch.set_facecolor(YT_BG); ax.set_facecolor(YT_BG)\n"
             "\n"
-            "sns.barplot(data=views_stats, y='video_type', x='avg_views', ax=ax, color=YT_RED, errorbar=None)\n"
+            "# FORZAMOS EL COLOR SÓLIDO con palette=[YT_RED] en lugar de color=YT_RED\n"
+            "sns.barplot(data=views_stats, y='video_type', x='avg_views', ax=ax, palette=[YT_RED], errorbar=None)\n"
             "\n"
             "ax.set_title('Average Views by Video Type', fontsize=TITLE_FONT_SIZE, color=YT_TEXT, loc='center', pad=20)\n"
             "ax.set_xlabel('Average Views', fontsize=11, color=YT_TEXT)\n"
@@ -124,7 +127,8 @@ def build_video_metrics(df: pd.DataFrame, period, language: str) -> list:
             "fig, ax = plt.subplots(figsize=(10, 5))\n"
             "fig.patch.set_facecolor(YT_BG); ax.set_facecolor(YT_BG)\n"
             "\n"
-            "sns.barplot(data=engagement_by_type, y='Video Type', x='Avg Engagement (%)', ax=ax, color=YT_RED, errorbar=None)\n"
+            "# FORZAMOS EL COLOR SÓLIDO con palette=[YT_RED]\n"
+            "sns.barplot(data=engagement_by_type, y='Video Type', x='Avg Engagement (%)', ax=ax, palette=[YT_RED], errorbar=None)\n"
             "\n"
             "ax.set_title('Average Engagement by Video Type', fontsize=TITLE_FONT_SIZE, color=YT_TEXT, loc='center', pad=20)\n"
             "ax.set_xlabel('Engagement (%)', fontsize=11, color=YT_TEXT)\n"
