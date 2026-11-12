@@ -1,25 +1,23 @@
 # .github/workflows/test-report-generator.yml
 #
-# Manual-only workflow to validate the 4_report_generator package and
-# publish the resulting notebooks into the repository.
+# Manual-only workflow to validate the 4_report_generator package (v2.0)
+# and publish the resulting notebooks into the repository.
 #
 # Pipeline:
 #   1. Checkout repo
 #   2. Set up Python
 #   3. Install dependencies
 #   4. List enriched DBs (sanity check)
-#   5. Generate notebooks (no outputs yet, just cells)
+#   5. Generate notebooks (AI insights + cells, no outputs yet)
 #   6. Execute notebooks in place (renders charts and tables into outputs)
 #   7. Enforce retention: keep only 4 most recent notebooks per language
-#   8. Commit and push if anything changed
+#   8. Commit notebooks, AI cache, and budget state if anything changed
 #
-# Retention policy: only the 4 most recent notebooks per language are
-# kept under notebook_en/weekly/ and notebook_es/weekly/. Older ones are
-# removed before committing, so the repository does not grow unbounded.
-#
-# The generator itself (main.py) does not execute the notebooks; it only
-# emits them. Execution is done here with `nbconvert --execute` so the
-# committed `.ipynb` files contain the rendered charts.
+# Notes:
+#   - The AI generation will be skipped automatically if no API keys are
+#     configured (the report will still be generated with charts).
+#   - The `ai_budget.json` and `cache_ai/` directory must be committed so
+#     the token limits and cached insights persist across runs.
 
 name: Test Report Generator
 
@@ -68,9 +66,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install \
-            pandas numpy matplotlib seaborn squarify scipy nbformat pyyaml \
-            jupyter nbconvert
+          pip install -r requirements.txt
+          pip install jupyter nbconvert tabulate
 
       # ----------------------------------------------------------------------
       # 4. Sanity check: list the enriched DBs visible to the runner
@@ -81,9 +78,13 @@ jobs:
           ls -la charts_archive/3_enrich-chart-data/ | head -50
 
       # ----------------------------------------------------------------------
-      # 5. Generate notebooks (cells only, no outputs yet)
+      # 5. Generate notebooks (AI insights + cells, no outputs yet)
       # ----------------------------------------------------------------------
       - name: Generate notebooks
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
           python scripts/4_report_generator/main.py \
             --language "${{ inputs.language }}" \
@@ -134,16 +135,23 @@ jobs:
           done
 
       # ----------------------------------------------------------------------
-      # 8. Commit and push if anything changed
+      # 8. Commit notebooks, AI cache, and budget state
       # ----------------------------------------------------------------------
-      - name: Commit notebooks
+      - name: Commit changes
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Add notebooks
           git add notebook_en notebook_es
+          
+          # Add AI cache and budget file (if they exist)
+          git add ai_budget.json 2>/dev/null || true
+          git add cache_ai/ 2>/dev/null || true
+          
           if git diff --cached --quiet; then
             echo "No changes to commit."
           else
-            git commit -m "chore(report): update weekly notebooks ($(date -u +%Y-W%V))"
+            git commit -m "chore(report): update weekly notebooks & AI cache ($(date -u +%Y-W%V))"
             git push
           fi
