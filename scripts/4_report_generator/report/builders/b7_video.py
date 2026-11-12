@@ -15,10 +15,8 @@ Responsibilities
 Notes
 -----
 - Uses `style_axes` and `add_bar_labels` from the notebook's SETUP_CODE.
-- Uses theme colors to maintain visual consistency.
-- The duration analysis uses a Gaussian KDE overlaid on the histogram.
-- To avoid Seaborn's automatic gradient, we force a single-color palette
-  with `palette=[YT_RED]` in all `sns.barplot` calls.
+- Uses Matplotlib's native `ax.barh` instead of `sns.barplot` to guarantee
+  solid colors (Seaborn sometimes applies unwanted gradients).
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -96,8 +94,8 @@ def build_video_metrics(df: pd.DataFrame, period, language: str) -> list:
             "fig, ax = plt.subplots(figsize=(10, 5))\n"
             "fig.patch.set_facecolor(YT_BG); ax.set_facecolor(YT_BG)\n"
             "\n"
-            "# FORZAMOS EL COLOR SÓLIDO con palette=[YT_RED] en lugar de color=YT_RED\n"
-            "sns.barplot(data=views_stats, y='video_type', x='avg_views', ax=ax, palette=[YT_RED], errorbar=None)\n"
+            "# Usamos Matplotlib nativo para garantizar el color sólido\n"
+            "bars = ax.barh(views_stats['video_type'], views_stats['avg_views'], color=YT_RED, edgecolor='none', height=BAR_HEIGHT)\n"
             "\n"
             "ax.set_title('Average Views by Video Type', fontsize=TITLE_FONT_SIZE, color=YT_TEXT, loc='center', pad=20)\n"
             "ax.set_xlabel('Average Views', fontsize=11, color=YT_TEXT)\n"
@@ -106,11 +104,9 @@ def build_video_metrics(df: pd.DataFrame, period, language: str) -> list:
             "\n"
             "style_axes(ax, grid_axis='x')\n"
             "\n"
-            "for p in ax.patches:\n"
-            "    width = p.get_width()\n"
-            "    if width > 0:\n"
-            "        ax.text(width + (width*0.02), p.get_y() + p.get_height()/2, \n"
-            "                f'{width/1_000_000:.1f}M', ha='left', va='center', fontsize=11, color=YT_TEXT)\n"
+            "for bar, val in zip(bars, views_stats['avg_views']):\n"
+            "    ax.text(val + (val*0.02), bar.get_y() + bar.get_height()/2, \n"
+            "            f'{val/1_000_000:.1f}M', va='center', fontsize=11, color=YT_TEXT)\n"
             "\n"
             "plt.tight_layout(); plt.show()"
         ),
@@ -127,15 +123,18 @@ def build_video_metrics(df: pd.DataFrame, period, language: str) -> list:
             "fig, ax = plt.subplots(figsize=(10, 5))\n"
             "fig.patch.set_facecolor(YT_BG); ax.set_facecolor(YT_BG)\n"
             "\n"
-            "# FORZAMOS EL COLOR SÓLIDO con palette=[YT_RED]\n"
-            "sns.barplot(data=engagement_by_type, y='Video Type', x='Avg Engagement (%)', ax=ax, palette=[YT_RED], errorbar=None)\n"
+            "# Usamos Matplotlib nativo para garantizar el color sólido\n"
+            "bars = ax.barh(engagement_by_type['Video Type'], engagement_by_type['Avg Engagement (%)'], color=YT_RED, edgecolor='none', height=BAR_HEIGHT)\n"
             "\n"
             "ax.set_title('Average Engagement by Video Type', fontsize=TITLE_FONT_SIZE, color=YT_TEXT, loc='center', pad=20)\n"
             "ax.set_xlabel('Engagement (%)', fontsize=11, color=YT_TEXT)\n"
             "ax.set_ylabel('Video Type', fontsize=11, color=YT_TEXT)\n"
             "\n"
             "style_axes(ax, grid_axis='x')\n"
-            "add_bar_labels(ax, fmt='{:.2f}', suffix='%', horizontal=True)\n"
+            "\n"
+            "for bar, val in zip(bars, engagement_by_type['Avg Engagement (%)']):\n"
+            "    ax.text(val + 0.1, bar.get_y() + bar.get_height()/2, \n"
+            "            f'{val:.2f}%', va='center', fontsize=11, color=YT_TEXT)\n"
             "\n"
             "plt.tight_layout(); plt.show()"
         ),
