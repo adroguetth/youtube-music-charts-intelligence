@@ -152,37 +152,72 @@ def _get_table_markdown_for_section(df: pd.DataFrame, section: str) -> str:
     Keeps tables small (head 5-10) to save tokens.
     """
     try:
+        # Ensure 'continent' column exists (the fix from before)
+        if 'continent' not in df.columns:
+            continents_map = {
+                'North America': ['United States', 'Mexico', 'Canada', 'Puerto Rico'],
+                'South America': ['Brazil', 'Argentina', 'Colombia', 'Chile', 'Peru', 'Venezuela'],
+                'Europe': ['United Kingdom', 'Sweden', 'Germany', 'France', 'Spain', 'Italy', 'Netherlands', 'Turkey'],
+                'Asia': ['India', 'South Korea', 'Japan', 'China', 'Indonesia', 'Pakistan', 'Philippines', 'Thailand', 'Vietnam'],
+                'Africa': ['Nigeria', 'South Africa', 'Kenya', 'Ghana'],
+                'Oceania': ['Australia', 'New Zealand'],
+                'Middle East': ['Israel', 'UAE', 'Saudi Arabia']
+            }
+            def get_cont(c):
+                for cont, countries in continents_map.items():
+                    if c in countries: return cont
+                return 'Other'
+            df['continent'] = df['artist_country'].apply(get_cont)
+
+        # Helper to format big numbers (M and K)
+        def fmt_num(x):
+            try:
+                x = float(x)
+                if x >= 1_000_000: return f"{x/1_000_000:.1f}M"
+                if x >= 1_000: return f"{x/1_000:.1f}K"
+                return f"{x:,.0f}"
+            except: return str(x)
+
         if section == "general_stats":
-            # A simple summary table
+            total_views = df['views'].sum()
+            total_likes = df['likes'].sum()
+            eng_rate = (total_likes / total_views * 100) if total_views > 0 else 0
             stats = pd.DataFrame({
-                "Metric": ["Total Songs", "Total Views", "Avg Engagement"],
-                "Value": [len(df), df['views'].sum(), df['engagement'].mean().round(2)]
+                "Metric": ["Total Songs", "Unique Countries", "Unique Genres", "Total Views", "Total Likes", "Engagement Rate (%)"],
+                "Value": [len(df), df['artist_country'].nunique(), df['macro_genre'].nunique(), fmt_num(total_views), fmt_num(total_likes), f"{eng_rate:.1f}%"]
             })
             return stats.to_markdown(index=False)
             
         elif section == "continents":
             t = df.groupby('continent').agg(songs=('track_name', 'count'), views=('views', 'sum')).reset_index().sort_values('songs', ascending=False)
+            t['views'] = t['views'].apply(fmt_num)
             return t.to_markdown(index=False)
             
         elif section == "countries":
-            t = df.groupby('artist_country').agg(songs=('track_name', 'count')).reset_index().sort_values('songs', ascending=False).head(10)
+            t = df.groupby('artist_country').agg(songs=('track_name', 'count'), views=('views', 'sum')).reset_index().sort_values('songs', ascending=False).head(10)
+            t['views'] = t['views'].apply(fmt_num)
             return t.to_markdown(index=False)
             
         elif section == "genre_analysis":
             t = df.groupby('macro_genre').agg(songs=('track_name', 'count'), views=('views', 'sum')).reset_index().sort_values('songs', ascending=False).head(10)
+            t['views'] = t['views'].apply(fmt_num)
             return t.to_markdown(index=False)
             
         elif section == "video_metrics":
             t = df.groupby('channel_type').agg(songs=('track_name', 'count'), views=('views', 'sum')).reset_index().sort_values('songs', ascending=False)
+            t['views'] = t['views'].apply(fmt_num)
             return t.to_markdown(index=False)
             
         elif section == "temporal_analysis":
             t = df.groupby('upload_quarter').agg(songs=('track_name', 'count'), views=('views', 'sum')).reset_index()
+            t['views'] = t['views'].apply(fmt_num)
             return t.to_markdown(index=False)
             
         elif section == "collaborations":
             t = df.groupby('is_collaboration').agg(songs=('track_name', 'count'), views=('views', 'sum'), engagement=('engagement', 'mean')).reset_index()
             t['is_collaboration'] = t['is_collaboration'].map({0: 'Solo', 1: 'Collaboration'})
+            t['views'] = t['views'].apply(fmt_num)
+            t['engagement'] = t['engagement'].round(2).astype(str) + '%'
             return t.to_markdown(index=False)
             
     except Exception as e:
