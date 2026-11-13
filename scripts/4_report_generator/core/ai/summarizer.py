@@ -58,7 +58,6 @@ PROMPTS = {
 }
 
 
-
 class TableSummarizer:
     def __init__(self, groq_api_key: str | None = None, google_api_key: str | None = None):
         self.groq_api_key = groq_api_key or os.environ.get("GROQ_API_KEY")
@@ -67,6 +66,7 @@ class TableSummarizer:
     def _summarize_with_groq(self, table_markdown: str, language: str) -> tuple[str, int]:
         """Call Groq API. Returns (summary, tokens_used)."""
         if not self.groq_api_key:
+            print("   [Summarizer] No Groq API key found.")
             return "", 0
 
         prompt = PROMPTS.get(language, PROMPTS["es"]).format(table=table_markdown)
@@ -81,32 +81,39 @@ class TableSummarizer:
                 json={
                     "model": "openai/gpt-oss-120b",
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3,
-                    "max_tokens": 250
+                    "temperature": 0.1,
+                    "max_tokens": 300
                 },
-                timeout=20
+                timeout=90  # Aumentado a 90s porque gpt-oss-120b tarda en procesar
             )
-            response.raise_for_status()
-            data = response.json()
             
+            if response.status_code != 200:
+                print(f"   [Summarizer] Groq Error {response.status_code}: {response.text[:200]}")
+                return "", 0
+                
+            data = response.json()
             summary = data["choices"][0]["message"]["content"].strip()
             tokens_used = data.get("usage", {}).get("total_tokens", 0)
             
             return summary, tokens_used
             
+        except requests.exceptions.Timeout:
+            print(f"   [Summarizer] Groq Timeout after 90 seconds.")
+            return "", 0
         except Exception as e:
-            print(f"   [Summarizer] Groq failed: {e}")
+            print(f"   [Summarizer] Groq Exception: {e}")
             return "", 0
 
     def _summarize_with_google(self, table_markdown: str, language: str) -> tuple[str, int]:
         """Call Google API. Returns (summary, tokens_used)."""
         if not self.google_api_key:
+            print("   [Summarizer] No Google API key found.")
             return "", 0
 
         prompt = PROMPTS.get(language, PROMPTS["es"]).format(table=table_markdown)
         
-        # Google Gemini/Gemma API endpoint (adjust according to Google AI Studio docs)
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent?key={self.google_api_key}"
+        # Usamos Gemini 1.5 Flash que es el modelo público de Google
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.google_api_key}"
         
         try:
             response = requests.post(
@@ -117,17 +124,19 @@ class TableSummarizer:
                 },
                 timeout=30
             )
-            response.raise_for_status()
-            data = response.json()
             
+            if response.status_code != 200:
+                print(f"   [Summarizer] Google Error {response.status_code}: {response.text[:200]}")
+                return "", 0
+                
+            data = response.json()
             summary = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            # Google does not always return exact token usage, but we can estimate it
             tokens_used = data.get("usageMetadata", {}).get("totalTokenCount", 0)
             
             return summary, tokens_used
             
         except Exception as e:
-            print(f"   [Summarizer] Google failed: {e}")
+            print(f"   [Summarizer] Google Exception: {e}")
             return "", 0
 
     def summarize(self, table_markdown: str, model_name: str, language: str = "es") -> tuple[str, str, int]:
@@ -153,8 +162,7 @@ class TableSummarizer:
             if summary:
                 return summary, "groq_gpt_oss", tokens
             else:
-                # If Groq failed (e.g., quota limit), try Google as fallback
-                print("   [Summarizer] Groq failed or returned empty. Trying Google Gemma as fallback...")
+                print("   [Summarizer] Groq failed. Trying Google as fallback...")
                 summary, tokens = self._summarize_with_google(table_markdown, language)
                 if summary:
                     return summary, "google_gemma", tokens
@@ -164,5 +172,6 @@ class TableSummarizer:
             if summary:
                 return summary, "google_gemma", tokens
         
-        # If we reach this point, both failed or the model was unavailable
+        # If both failed
+        print("   [Summarizer] Both Groq and Google failed to generate a summary.")
         return "", model_name, 0
