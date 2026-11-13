@@ -32,28 +32,28 @@ import requests
 # ============================================================================
 WRITER_PROMPTS = {
     "es": (
-        "Actúa como un periodista de datos musicales de élite, escribiendo para una revista como Billboard o Rolling Stone. "
-        "A continuación, te presento un resumen estadístico crudo de la semana:\n\n"
+        "Eres un estratega senior de la industria musical. "
+        "Tengo este resumen de datos crudos de la semana:\n\n"
         "{summary}\n\n"
-        "Tu tarea es redactar un único párrafo analítico, atractivo y profesional (máximo 4 líneas). "
+        "Redacta un análisis ejecutivo de 6 líneas. "
         "Reglas estrictas:\n"
-        "1. Cero alucinaciones: Usa únicamente las cifras exactas que aparecen en el resumen.\n"
-        "2. No uses viñetas, listas ni saltos de línea.\n"
-        "3. No uses introducciones genéricas como 'Aquí tienes el análisis' o 'En resumen'. Ve directo al grano.\n"
-        "4. Comienza con un 'hook' (gancho) periodístico que destaque la tendencia o el dato más sorprendente.\n"
-        "5. Mantén un tono dinámico, informativo y persuasivo, como si cerraras un artículo de portada."
+        "1. Empieza con una conclusión analítica directa (no con una introducción).\n"
+        "2. Conecta los datos con el contexto de la industria (ej. compara el engagement con el promedio del mercado).\n"
+        "3. Usa los números exactos del resumen para sustentar tus afirmaciones.\n"
+        "4. Termina con una implicación estratégica (ej. 'esto sugiere que la fidelidad pesa más que la viralidad').\n"
+        "5. No uses frases de relleno. NO uses notación científica."
     ),
     "en": (
-        "Act as an elite music data journalist writing for a top-tier publication like Billboard or Rolling Stone. "
-        "Here is a raw statistical summary for the week:\n\n"
+        "You are a senior music industry strategist. "
+        "I have this raw data summary for the week:\n\n"
         "{summary}\n\n"
-        "Your task is to write a single, compelling, and professional analytical paragraph (maximum 4 lines). "
+        "Write an executive analysis of 6 lines. "
         "Strict rules:\n"
-        "1. Zero hallucinations: Use ONLY the exact numbers provided in the summary.\n"
-        "2. Do not use bullet points, lists, or line breaks.\n"
-        "3. No generic introductory fluff like 'Here is the analysis' or 'In summary'. Get straight to the point.\n"
-        "4. Start with a journalistic hook highlighting the most surprising trend or data point.\n"
-        "5. Keep a dynamic, informative, and persuasive tone, as if closing a cover story."
+        "1. Start with a direct analytical conclusion (not an introduction).\n"
+        "2. Connect the data with industry context (e.g., compare engagement with market average).\n"
+        "3. Use the exact numbers from the summary to support your claims.\n"
+        "4. End with a strategic implication (e.g., 'this suggests loyalty weighs more than virality').\n"
+        "5. No filler phrases. NO scientific notation."
     )
 }
 
