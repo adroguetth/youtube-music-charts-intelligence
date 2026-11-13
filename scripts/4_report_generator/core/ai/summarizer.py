@@ -32,33 +32,31 @@ import requests
 # ============================================================================
 # PROMPT TEMPLATES
 # ============================================================================
-# ============================================================================
-# PROMPT TEMPLATES
-# ============================================================================
 PROMPTS = {
     "es": (
-        "Actúa como un analista de datos experto en la industria musical. "
-        "A continuación, recibirás una tabla en formato Markdown:\n\n"
+        "Eres un analista de datos de la industria musical. "
+        "Analiza la siguiente tabla:\n\n"
         "{table}\n\n"
-        "Tu objetivo es extraer la información clave para que un periodista redacte un artículo. "
-        "Sigue estas reglas estrictas:\n"
-        "1. Escribe un texto continuo de máximo 4 oraciones (no uses viñetas, listas ni negritas).\n"
-        "2. Menciona explícitamente el líder de la tabla (con su cifra exacta).\n"
-        "3. Destaca la tendencia general o el dato más sorprendente (ej. caídas abruptas, empates, márgenes amplios).\n"
-        "4. Usa exclusivamente los datos numéricos que aparecen en la tabla. No inventes ni extrapoles."
+        "Extrae un resumen estructurado de máximo 5 oraciones. "
+        "Reglas estrictas:\n"
+        "1. Menciona el líder absoluto y su cifra exacta.\n"
+        "2. Calcula y menciona una tasa o ratio clave si es posible (ej. engagement rate).\n"
+        "3. Destaca un dato de contraste (una brecha, una caída o una concentración).\n"
+        "4. No uses viñetas. No uses lenguaje poético. Ve directo al dato matemático."
     ),
     "en": (
-        "Act as an expert music data analyst. "
-        "You will receive a data table in Markdown format:\n\n"
+        "You are a music industry data analyst. "
+        "Analyze the following table:\n\n"
         "{table}\n\n"
-        "Your goal is to extract the key information so a journalist can write an article. "
-        "Follow these strict rules:\n"
-        "1. Write a continuous text of maximum 4 sentences (do not use bullet points, lists, or bold text).\n"
-        "2. Explicitly mention the table leader (with the exact number).\n"
-        "3. Highlight the general trend or the most surprising data point (e.g., abrupt drops, ties, wide margins).\n"
-        "4. Use ONLY the numerical data provided in the table. Do not invent or extrapolate."
+        "Extract a structured summary of maximum 5 sentences. "
+        "Strict rules:\n"
+        "1. Mention the absolute leader and its exact figure.\n"
+        "2. Calculate and mention a key rate or ratio if possible (e.g., engagement rate).\n"
+        "3. Highlight a contrasting data point (a gap, a drop, or a concentration).\n"
+        "4. No bullet points. No poetic language. Get straight to the mathematical data."
     )
 }
+
 
 
 class TableSummarizer:
