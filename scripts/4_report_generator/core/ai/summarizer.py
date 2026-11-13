@@ -8,7 +8,7 @@ Responsibilities
 ----------------
 - Build the specific prompt for table summarization.
 - Try to summarize using Groq (GPT-OSS-120B) first.
-- Fallback to Google (Gemma-4-31B-it) if Groq fails or hits its limit.
+- Fallback to Google (Gemma 4) if Groq fails or hits its limit.
 - Return the raw summary string.
 
 Notes
@@ -82,7 +82,7 @@ class TableSummarizer:
                     "model": "openai/gpt-oss-120b",
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.1,
-                    "max_tokens": 300
+                    "max_tokens": 500  # Aumentado para dar espacio a los tokens de razonamiento
                 },
                 timeout=90  # Aumentado a 90s porque gpt-oss-120b tarda en procesar
             )
@@ -112,8 +112,8 @@ class TableSummarizer:
 
         prompt = PROMPTS.get(language, PROMPTS["es"]).format(table=table_markdown)
         
-        # Usamos Gemini 1.5 Flash que es el modelo público de Google
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.google_api_key}"
+        # URL exacta para el modelo gemma-4-26b-a4b-it
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:generateContent?key={self.google_api_key}"
         
         try:
             response = requests.post(
@@ -122,7 +122,7 @@ class TableSummarizer:
                 json={
                     "contents": [{"parts": [{"text": prompt}]}]
                 },
-                timeout=30
+                timeout=60
             )
             
             if response.status_code != 200:
@@ -162,7 +162,7 @@ class TableSummarizer:
             if summary:
                 return summary, "groq_gpt_oss", tokens
             else:
-                print("   [Summarizer] Groq failed. Trying Google as fallback...")
+                print("   [Summarizer] Groq failed. Trying Google Gemma as fallback...")
                 summary, tokens = self._summarize_with_google(table_markdown, language)
                 if summary:
                     return summary, "google_gemma", tokens
