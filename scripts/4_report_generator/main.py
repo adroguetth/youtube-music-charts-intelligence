@@ -29,6 +29,7 @@ if str(_HERE) not in sys.path:
 import argparse
 from datetime import date, datetime
 
+import numpy as np
 import pandas as pd
 
 from config import (
@@ -149,6 +150,8 @@ def _generate_ai_insights(df: pd.DataFrame, period_label: str, language: str, us
         
         if not raw_summary:
             logger.warning(f"      [AI] Failed to summarize {section}. Skipping.")
+            # FIX: Record failure so the circuit breaker can activate
+            budget.record_usage(model_used, 0, success=False)
             continue
 
         # 4. Polish with DeepSeek (pass 'section' as the first argument)
@@ -258,7 +261,6 @@ def _get_table_markdown_for_section(df: pd.DataFrame, section: str) -> str:
             return t.to_markdown(index=False)
 
         elif section == "genre_treemap":
-            # Same table as genre_stats but perhaps sorted differently
             t = df.groupby('macro_genre').agg(songs=('track_name', 'count')).reset_index().sort_values('songs', ascending=False).head(15)
             return t.to_markdown(index=False)
 
