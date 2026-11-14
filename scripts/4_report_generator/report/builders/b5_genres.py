@@ -55,8 +55,9 @@ def build_genre_analysis(df: pd.DataFrame, period, language: str) -> list:
         new_markdown_cell(section_title("genre_analysis", language)),
 
         # ----------------------------------------------------------------------
-        # 5.1 Genre Statistics (Table)
+        # 5.1 Genre Statistics (Table) - FIX: Added missing title
         # ----------------------------------------------------------------------
+        new_markdown_cell("### 5.1. Genre Statistics" if language == "en" else "### 5.1. Estadísticas por Género"),
         new_code_cell(
             "genre_stats = (df\n"
             "    .groupby('macro_genre')\n"
