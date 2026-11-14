@@ -15,6 +15,9 @@ Notes
 - This builder does not create any plots in the current version.
 - The numeric formatting uses `format_number` from the notebook's
   SETUP_CODE to avoid scientific notation and trailing zeros.
+- The `insights` argument is accepted for signature consistency with
+  other builders but is intentionally ignored: the General Statistics
+  section has no AI-generated analysis.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -29,7 +32,12 @@ from nbformat.v4 import new_code_cell, new_markdown_cell
 from report.titles import section_title
 
 
-def build_general_stats(df: pd.DataFrame, period, language: str) -> list:
+def build_general_stats(
+    df: pd.DataFrame,
+    period,
+    language: str,
+    insights: dict[str, str] | None = None,
+) -> list:
     """
     Build the General Statistics section.
 
@@ -41,6 +49,10 @@ def build_general_stats(df: pd.DataFrame, period, language: str) -> list:
         The reporting period.
     language : str
         ``"en"`` or ``"es"``.
+    insights : dict[str, str] or None
+        Optional mapping of ``section_id -> markdown_text``. Ignored in
+        this builder: the General Statistics section has no AI-generated
+        analysis. Accepted for signature consistency.
 
     Returns
     -------
