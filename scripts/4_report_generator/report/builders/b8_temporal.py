@@ -9,6 +9,7 @@ Responsibilities
 - Subsection 8.1: Views evolution by quarter (grouped bar chart).
 - Subsection 8.2: Engagement evolution by quarter (grouped bar chart).
 - Subsection 8.3: Release distribution by quarter (bar chart).
+- Inject AI insights after each subsection (if provided).
 
 Notes
 -----
@@ -17,6 +18,8 @@ Notes
 - Uses `style_axes` and `format_axis_millions` for consistency.
 - The charts are grouped bar charts (not line charts) to match the
   standardized design.
+- AI insights are injected by the builder itself (not by `notebook.py`)
+  to allow per-subsection placement.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -31,7 +34,12 @@ from nbformat.v4 import new_code_cell, new_markdown_cell
 from report.titles import section_title
 
 
-def build_temporal_analysis(df: pd.DataFrame, period, language: str) -> list:
+def build_temporal_analysis(
+    df: pd.DataFrame,
+    period,
+    language: str,
+    insights: dict[str, str] | None = None,
+) -> list:
     """
     Build the Temporal Analysis section.
 
@@ -43,27 +51,46 @@ def build_temporal_analysis(df: pd.DataFrame, period, language: str) -> list:
         The reporting period.
     language : str
         ``"en"`` or ``"es"``.
+    insights : dict[str, str] or None
+        Optional mapping of ``section_id -> markdown_text``. If provided,
+        the insight for each subsection is injected right after its cells.
 
     Returns
     -------
     list
         A list of `nbformat` cells.
     """
-    return [
-        new_markdown_cell(section_title("temporal_analysis", language)),
+    cells: list = []
 
+    # ========================================================================
+    # Section title
+    # ========================================================================
+    cells.append(new_markdown_cell(section_title("temporal_analysis", language)))
+
+    # ========================================================================
+    # Shared data preparation (used by 8.1 and 8.2)
+    # ========================================================================
+    cells.append(
         new_code_cell(
             "top5_genres = genre_stats.nlargest(5, 'total_songs')['macro_genre'].tolist()\n"
             "df_temporal = df[df['macro_genre'].isin(top5_genres)].copy()\n"
             "\n"
             "temporal_views = df_temporal.groupby(['upload_quarter', 'macro_genre'])['views'].sum().reset_index()\n"
             "temporal_engagement = df_temporal.groupby(['upload_quarter', 'macro_genre'])['engagement'].mean().reset_index()"
-        ),
+        )
+    )
 
-        # ----------------------------------------------------------------------
-        # 8.1 Views Evolution by Quarter
-        # ----------------------------------------------------------------------
-        new_markdown_cell("### 8.1. Views Evolution by Quarter" if language == "en" else "### 8.1. Evolución de Vistas por Trimestre"),
+    # ========================================================================
+    # 8.1 Views Evolution by Quarter
+    # ========================================================================
+    cells.append(
+        new_markdown_cell(
+            "### 8.1. Views Evolution by Quarter"
+            if language == "en"
+            else "### 8.1. Evolución de Vistas por Trimestre"
+        )
+    )
+    cells.append(
         new_code_cell(
             "fig1, ax1 = plt.subplots(figsize=(12, 6))\n"
             "fig1.patch.set_facecolor(YT_BG); ax1.set_facecolor(YT_BG)\n"
@@ -84,12 +111,22 @@ def build_temporal_analysis(df: pd.DataFrame, period, language: str) -> list:
             "    for text in legend1.get_texts(): text.set_color(YT_TEXT)\n"
             "\n"
             "plt.tight_layout(); plt.show()"
-        ),
+        )
+    )
+    if insights and insights.get("temporal_views"):
+        cells.append(new_markdown_cell(insights["temporal_views"]))
 
-        # ----------------------------------------------------------------------
-        # 8.2 Engagement Evolution by Quarter
-        # ----------------------------------------------------------------------
-        new_markdown_cell("### 8.2. Engagement Evolution by Quarter" if language == "en" else "### 8.2. Evolución del Engagement por Trimestre"),
+    # ========================================================================
+    # 8.2 Engagement Evolution by Quarter
+    # ========================================================================
+    cells.append(
+        new_markdown_cell(
+            "### 8.2. Engagement Evolution by Quarter"
+            if language == "en"
+            else "### 8.2. Evolución del Engagement por Trimestre"
+        )
+    )
+    cells.append(
         new_code_cell(
             "fig2, ax2 = plt.subplots(figsize=(12, 6))\n"
             "fig2.patch.set_facecolor(YT_BG); ax2.set_facecolor(YT_BG)\n"
@@ -108,12 +145,22 @@ def build_temporal_analysis(df: pd.DataFrame, period, language: str) -> list:
             "    for text in legend2.get_texts(): text.set_color(YT_TEXT)\n"
             "\n"
             "plt.tight_layout(); plt.show()"
-        ),
+        )
+    )
+    if insights and insights.get("temporal_engagement"):
+        cells.append(new_markdown_cell(insights["temporal_engagement"]))
 
-        # ----------------------------------------------------------------------
-        # 8.3 Release Distribution by Quarter
-        # ----------------------------------------------------------------------
-        new_markdown_cell("### 8.3. Release Distribution by Quarter" if language == "en" else "### 8.3. Distribución de Lanzamientos por Trimestre"),
+    # ========================================================================
+    # 8.3 Release Distribution by Quarter
+    # ========================================================================
+    cells.append(
+        new_markdown_cell(
+            "### 8.3. Release Distribution by Quarter"
+            if language == "en"
+            else "### 8.3. Distribución de Lanzamientos por Trimestre"
+        )
+    )
+    cells.append(
         new_code_cell(
             "season_counts = df['upload_quarter'].value_counts().sort_index()\n"
             "\n"
@@ -130,5 +177,9 @@ def build_temporal_analysis(df: pd.DataFrame, period, language: str) -> list:
             "add_bar_labels(ax, fmt='{:.0f}', horizontal=False)\n"
             "\n"
             "plt.tight_layout(); plt.show()"
-        ),
-    ]
+        )
+    )
+    if insights and insights.get("temporal_releases"):
+        cells.append(new_markdown_cell(insights["temporal_releases"]))
+
+    return cells
