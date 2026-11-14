@@ -8,6 +8,7 @@ Responsibilities
 - Emit the section title.
 - Subsection 9.1: Views vs Number of Artists (boxplot).
 - Subsection 9.2: Engagement vs Number of Artists (boxplot).
+- Inject AI insights after each subsection (if provided).
 
 Notes
 -----
@@ -17,6 +18,8 @@ Notes
 - The boxplots use `YT_DARK_GREY` for solos and `YT_RED` for collaborations.
 - The two charts are separated into distinct code cells for better
   readability (full width).
+- AI insights are injected by the builder itself (not by `notebook.py`)
+  to allow per-subsection placement.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -31,7 +34,12 @@ from nbformat.v4 import new_code_cell, new_markdown_cell
 from report.titles import section_title
 
 
-def build_collaborations(df: pd.DataFrame, period, language: str) -> list:
+def build_collaborations(
+    df: pd.DataFrame,
+    period,
+    language: str,
+    insights: dict[str, str] | None = None,
+) -> list:
     """
     Build the Collaborations Analysis section.
 
@@ -43,16 +51,26 @@ def build_collaborations(df: pd.DataFrame, period, language: str) -> list:
         The reporting period.
     language : str
         ``"en"`` or ``"es"``.
+    insights : dict[str, str] or None
+        Optional mapping of ``section_id -> markdown_text``. If provided,
+        the insight for each subsection is injected right after its cells.
 
     Returns
     -------
     list
         A list of `nbformat` cells.
     """
-    return [
-        new_markdown_cell(section_title("collaborations", language)),
-        
-        # 1. Tabla de resumen
+    cells: list = []
+
+    # ========================================================================
+    # Section title
+    # ========================================================================
+    cells.append(new_markdown_cell(section_title("collaborations", language)))
+
+    # ========================================================================
+    # Summary table (shared by 9.1 and 9.2)
+    # ========================================================================
+    cells.append(
         new_code_cell(
             "collab_stats = df.groupby('is_collaboration').agg(\n"
             "    count=('track_name', 'count'),\n"
@@ -64,12 +82,20 @@ def build_collaborations(df: pd.DataFrame, period, language: str) -> list:
             "collab_stats['avg_views'] = collab_stats['avg_views'].apply(lambda x: f'{x:,.0f}')\n"
             "collab_stats['avg_engagement'] = collab_stats['avg_engagement'].round(2).astype(str) + '%'\n"
             "display(collab_stats)"
-        ),
+        )
+    )
 
-        # ----------------------------------------------------------------------
-        # 9.1 Views vs Number of Artists
-        # ----------------------------------------------------------------------
-        new_markdown_cell("### 9.1. Views vs Number of Artists" if language == "en" else "### 9.1. Vistas vs Cantidad de Artistas"),
+    # ========================================================================
+    # 9.1 Views vs Number of Artists
+    # ========================================================================
+    cells.append(
+        new_markdown_cell(
+            "### 9.1. Views vs Number of Artists"
+            if language == "en"
+            else "### 9.1. Vistas vs Cantidad de Artistas"
+        )
+    )
+    cells.append(
         new_code_cell(
             "fig, ax = plt.subplots(figsize=(10, 5))\n"
             "fig.patch.set_facecolor(YT_BG)\n"
@@ -94,12 +120,22 @@ def build_collaborations(df: pd.DataFrame, period, language: str) -> list:
             "    for text in legend.get_texts(): text.set_color(YT_TEXT)\n"
             "\n"
             "plt.tight_layout(); plt.show()"
-        ),
+        )
+    )
+    if insights and insights.get("collab_views"):
+        cells.append(new_markdown_cell(insights["collab_views"]))
 
-        # ----------------------------------------------------------------------
-        # 9.2 Engagement vs Number of Artists
-        # ----------------------------------------------------------------------
-        new_markdown_cell("### 9.2. Engagement vs Number of Artists" if language == "en" else "### 9.2. Engagement vs Cantidad de Artistas"),
+    # ========================================================================
+    # 9.2 Engagement vs Number of Artists
+    # ========================================================================
+    cells.append(
+        new_markdown_cell(
+            "### 9.2. Engagement vs Number of Artists"
+            if language == "en"
+            else "### 9.2. Engagement vs Cantidad de Artistas"
+        )
+    )
+    cells.append(
         new_code_cell(
             "fig, ax = plt.subplots(figsize=(10, 5))\n"
             "fig.patch.set_facecolor(YT_BG)\n"
@@ -123,5 +159,9 @@ def build_collaborations(df: pd.DataFrame, period, language: str) -> list:
             "    for text in legend.get_texts(): text.set_color(YT_TEXT)\n"
             "\n"
             "plt.tight_layout(); plt.show()"
-        ),
-    ]
+        )
+    )
+    if insights and insights.get("collab_engagement"):
+        cells.append(new_markdown_cell(insights["collab_engagement"]))
+
+    return cells
