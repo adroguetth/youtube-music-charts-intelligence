@@ -11,6 +11,7 @@ Responsibilities
 - Subsection 7.3: Average engagement by video type (horizontal bar chart).
 - Subsection 7.4: Duration analysis (histogram + boxplot).
 - Subsection 7.5: Channel type distribution (horizontal bar chart).
+- Inject AI insights after each subsection (if provided).
 
 Notes
 -----
@@ -18,6 +19,8 @@ Notes
 - Uses Matplotlib's native `ax.barh` instead of `sns.barplot` to guarantee
   solid colors (Seaborn sometimes applies unwanted gradients).
 - The histogram uses `alpha=1.0` to prevent color blending with the white background.
+- AI insights are injected by the builder itself (not by `notebook.py`)
+  to allow per-subsection placement.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -32,7 +35,12 @@ from nbformat.v4 import new_code_cell, new_markdown_cell
 from report.titles import section_title
 
 
-def build_video_metrics(df: pd.DataFrame, period, language: str) -> list:
+def build_video_metrics(
+    df: pd.DataFrame,
+    period,
+    language: str,
+    insights: dict[str, str] | None = None,
+) -> list:
     """
     Build the Video Metrics section.
 
@@ -44,19 +52,33 @@ def build_video_metrics(df: pd.DataFrame, period, language: str) -> list:
         The reporting period.
     language : str
         ``"en"`` or ``"es"``.
+    insights : dict[str, str] or None
+        Optional mapping of ``section_id -> markdown_text``. If provided,
+        the insight for each subsection is injected right after its cells.
 
     Returns
     -------
     list
         A list of `nbformat` cells.
     """
-    return [
-        new_markdown_cell(section_title("video_metrics", language)),
+    cells: list = []
 
-        # ----------------------------------------------------------------------
-        # 7.1 Video Summary
-        # ----------------------------------------------------------------------
-        new_markdown_cell("### 7.1. Video Summary" if language == "en" else "### 7.1. Resumen de Video"),
+    # ========================================================================
+    # Section title
+    # ========================================================================
+    cells.append(new_markdown_cell(section_title("video_metrics", language)))
+
+    # ========================================================================
+    # 7.1 Video Summary
+    # ========================================================================
+    cells.append(
+        new_markdown_cell(
+            "### 7.1. Video Summary"
+            if language == "en"
+            else "### 7.1. Resumen de Video"
+        )
+    )
+    cells.append(
         new_code_cell(
             "video_stats = {\n"
             "    'Category': ['Official Videos', 'Lyric Videos', 'Live Performances', 'Collaborations'],\n"
@@ -65,12 +87,22 @@ def build_video_metrics(df: pd.DataFrame, period, language: str) -> list:
             "v_stats_df = pd.DataFrame(video_stats)\n"
             "v_stats_df['Percentage'] = (v_stats_df['Count'] / len(df) * 100).round(1).astype(str) + '%'\n"
             "display(v_stats_df)"
-        ),
+        )
+    )
+    if insights and insights.get("video_summary"):
+        cells.append(new_markdown_cell(insights["video_summary"]))
 
-        # ----------------------------------------------------------------------
-        # 7.2 Views by Video Type
-        # ----------------------------------------------------------------------
-        new_markdown_cell("### 7.2. Views by Video Type" if language == "en" else "### 7.2. Vistas por Tipo de Video"),
+    # ========================================================================
+    # 7.2 Views by Video Type
+    # ========================================================================
+    cells.append(
+        new_markdown_cell(
+            "### 7.2. Views by Video Type"
+            if language == "en"
+            else "### 7.2. Vistas por Tipo de Video"
+        )
+    )
+    cells.append(
         new_code_cell(
             "df_video = df.copy()\n"
             "conditions = [df_video['is_official_video'] == 1, df_video['is_lyric_video'] == 1, df_video['is_live_performance'] == 1]\n"
@@ -109,12 +141,22 @@ def build_video_metrics(df: pd.DataFrame, period, language: str) -> list:
             "            f'{val/1_000_000:.1f}M', va='center', fontsize=11, color=YT_TEXT)\n"
             "\n"
             "plt.tight_layout(); plt.show()"
-        ),
+        )
+    )
+    if insights and insights.get("video_views"):
+        cells.append(new_markdown_cell(insights["video_views"]))
 
-        # ----------------------------------------------------------------------
-        # 7.3 Engagement by Video Type
-        # ----------------------------------------------------------------------
-        new_markdown_cell("### 7.3. Engagement by Video Type" if language == "en" else "### 7.3. Engagement por Tipo de Video"),
+    # ========================================================================
+    # 7.3 Engagement by Video Type
+    # ========================================================================
+    cells.append(
+        new_markdown_cell(
+            "### 7.3. Engagement by Video Type"
+            if language == "en"
+            else "### 7.3. Engagement por Tipo de Video"
+        )
+    )
+    cells.append(
         new_code_cell(
             "engagement_by_type = df_video.groupby('video_type')['engagement'].mean().reset_index()\n"
             "engagement_by_type.columns = ['Video Type', 'Avg Engagement (%)']\n"
@@ -136,12 +178,22 @@ def build_video_metrics(df: pd.DataFrame, period, language: str) -> list:
             "            f'{val:.2f}%', va='center', fontsize=11, color=YT_TEXT)\n"
             "\n"
             "plt.tight_layout(); plt.show()"
-        ),
+        )
+    )
+    if insights and insights.get("video_engagement"):
+        cells.append(new_markdown_cell(insights["video_engagement"]))
 
-        # ----------------------------------------------------------------------
-        # 7.4 Duration Analysis
-        # ----------------------------------------------------------------------
-        new_markdown_cell("### 7.4. Duration Analysis" if language == "en" else "### 7.4. Análisis de Duración"),
+    # ========================================================================
+    # 7.4 Duration Analysis
+    # ========================================================================
+    cells.append(
+        new_markdown_cell(
+            "### 7.4. Duration Analysis"
+            if language == "en"
+            else "### 7.4. Análisis de Duración"
+        )
+    )
+    cells.append(
         new_code_cell(
             "duration_minutes = df['duration_s'] / 60\n"
             "\n"
@@ -187,12 +239,22 @@ def build_video_metrics(df: pd.DataFrame, period, language: str) -> list:
             "    ax.grid(True, color=YT_GRID, linestyle='--', alpha=0.5)\n"
             "\n"
             "plt.tight_layout(); plt.show()"
-        ),
+        )
+    )
+    if insights and insights.get("video_duration"):
+        cells.append(new_markdown_cell(insights["video_duration"]))
 
-        # ----------------------------------------------------------------------
-        # 7.5 Channel Type Distribution
-        # ----------------------------------------------------------------------
-        new_markdown_cell("### 7.5. Channel Type Distribution" if language == "en" else "### 7.5. Distribución por Tipo de Canal"),
+    # ========================================================================
+    # 7.5 Channel Type Distribution
+    # ========================================================================
+    cells.append(
+        new_markdown_cell(
+            "### 7.5. Channel Type Distribution"
+            if language == "en"
+            else "### 7.5. Distribución por Tipo de Canal"
+        )
+    )
+    cells.append(
         new_code_cell(
             "channel_counts = df['channel_type'].value_counts()\n"
             "ch_df = pd.DataFrame({'Channel Type': channel_counts.index, 'Count': channel_counts.values})\n"
@@ -211,5 +273,9 @@ def build_video_metrics(df: pd.DataFrame, period, language: str) -> list:
             "add_bar_labels(ax, fmt='{:.0f}', horizontal=True)\n"
             "\n"
             "plt.tight_layout(); plt.show()"
-        ),
-    ]
+        )
+    )
+    if insights and insights.get("video_channels"):
+        cells.append(new_markdown_cell(insights["video_channels"]))
+
+    return cells
