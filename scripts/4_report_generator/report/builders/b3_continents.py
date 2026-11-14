@@ -15,6 +15,10 @@ Notes
 - Uses the standardized color palette defined in `report.theme`.
 - Uses `style_axes` and `add_bar_labels` to maintain consistency.
 - Continents are mapped in the notebook's SETUP_CODE via `get_continent`.
+- The `insights` argument is accepted for signature consistency with
+  other builders but is intentionally ignored: the Continent Analysis
+  section has no internal AI-generated analysis. The insight (if any)
+  is injected at the end of the section by `notebook.py`.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -29,7 +33,12 @@ from nbformat.v4 import new_code_cell, new_markdown_cell
 from report.titles import section_title
 
 
-def build_continents(df: pd.DataFrame, period, language: str) -> list:
+def build_continents(
+    df: pd.DataFrame,
+    period,
+    language: str,
+    insights: dict[str, str] | None = None,
+) -> list:
     """
     Build the Continent Analysis section.
 
@@ -41,6 +50,10 @@ def build_continents(df: pd.DataFrame, period, language: str) -> list:
         The reporting period.
     language : str
         ``"en"`` or ``"es"``.
+    insights : dict[str, str] or None
+        Optional mapping of ``section_id -> markdown_text``. Ignored in
+        this builder: the Continent Analysis section has no internal
+        AI-generated analysis. Accepted for signature consistency.
 
     Returns
     -------
