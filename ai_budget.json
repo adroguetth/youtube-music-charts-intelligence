@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-11-12T00:00:00Z",
+  "last_updated": "2026-11-14T00:00:00Z",
   "status": {
     "consecutive_successes": 0,
     "consecutive_failures": 0
@@ -15,10 +15,15 @@
       "max_daily_limit": 1500000,
       "priority": 2
     },
+    "muse_spark": {
+      "tokens_remaining": 100000,
+      "max_daily_limit": 100000,
+      "priority": 3
+    },
     "deepseek_writer": {
       "tokens_remaining": 500000,
       "max_daily_limit": 500000,
-      "priority": 3
+      "priority": 4
     }
   }
 }
