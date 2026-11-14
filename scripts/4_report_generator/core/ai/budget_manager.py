@@ -13,6 +13,8 @@ Responsibilities
   table summarization.
 - Record token usage and update the remaining limits.
 - Adjust future limits based on consecutive successes or failures.
+- Implement a circuit breaker: if a model fails N times in a row, skip it
+  temporarily and go directly to the next model.
 
 Notes
 -----
@@ -50,10 +52,20 @@ DEFAULT_DEEPSEEK_LIMIT = 500_000
 BONUS_MULTIPLIER = 1.05  # +5% tokens per consecutive success
 PENALTY_MULTIPLIER = 0.90  # -10% tokens per consecutive failure
 
+# Circuit breaker: if a model fails N times in a row, mark it as "down"
+# for the rest of the run and skip it.
+CIRCUIT_BREAKER_THRESHOLD = 3
+
 
 class BudgetManager:
     def __init__(self):
         self._state = self._load_state()
+        # In-memory circuit breaker state (not persisted across runs)
+        self._model_failures: dict[str, int] = {
+            "groq_gpt_oss": 0,
+            "google_gemma": 0,
+            "muse_spark": 0,
+        }
 
     def _load_state(self) -> dict:
         """Load the budget state from disk, or create a default one."""
@@ -129,6 +141,9 @@ class BudgetManager:
                     model["tokens_remaining"] = model["max_daily_limit"]
                 self._state["status"]["consecutive_failures"] = 0
                 self._state["status"]["consecutive_successes"] = 0
+                # Reset circuit breaker too
+                for model_name in self._model_failures:
+                    self._model_failures[model_name] = 0
         except ValueError:
             pass  # Ignore parse errors, keep current state
 
@@ -137,11 +152,11 @@ class BudgetManager:
         Decide which small model to use for summarization.
         
         Priority order:
-            1. Groq (fast, free)
-            2. Google Gemma (free, generous daily limit)
+            1. Groq (fast, free) - skipped if circuit breaker is open
+            2. Google Gemma (free, generous daily limit) - skipped if open
             3. Meta Muse Spark (paid, reliable fallback)
         
-        If all three are exhausted, returns an empty string.
+        If all three are exhausted or down, returns an empty string.
         """
         self._reset_daily_limits_if_needed()
         
@@ -149,16 +164,23 @@ class BudgetManager:
         google_remaining = self._state["models"]["google_gemma"]["tokens_remaining"]
         muse_remaining = self._state["models"]["muse_spark"]["tokens_remaining"]
 
-        if groq_remaining > 10_000:
+        # Circuit breaker: check if a model has failed too many times in a row
+        groq_down = self._model_failures["groq_gpt_oss"] >= CIRCUIT_BREAKER_THRESHOLD
+        google_down = self._model_failures["google_gemma"] >= CIRCUIT_BREAKER_THRESHOLD
+
+        if groq_remaining > 10_000 and not groq_down:
             return "groq_gpt_oss"
-        elif google_remaining > 50_000:
-            print("   [Budget] Groq is low. Switching to Google Gemma.")
+        elif google_remaining > 50_000 and not google_down:
+            if groq_down:
+                print("   [Budget] Groq is down (circuit breaker). Switching to Google Gemma.")
+            else:
+                print("   [Budget] Groq is low. Switching to Google Gemma.")
             return "google_gemma"
         elif muse_remaining > 10_000:
-            print("   [Budget] Both Groq and Google are exhausted. Switching to Meta Muse Spark (paid).")
+            print("   [Budget] Both Groq and Google are unavailable. Switching to Meta Muse Spark (paid).")
             return "muse_spark"
         else:
-            print("   [Budget] WARNING: All three models are exhausted. No AI summary will be generated.")
+            print("   [Budget] WARNING: All three models are exhausted or down. No AI summary will be generated.")
             return ""
 
     def record_usage(self, model_name: str, tokens_used: int, success: bool):
@@ -188,9 +210,15 @@ class BudgetManager:
         if success:
             self._state["status"]["consecutive_successes"] += 1
             self._state["status"]["consecutive_failures"] = 0
+            # Reset circuit breaker for this model
+            self._model_failures[model_name] = 0
         else:
             self._state["status"]["consecutive_failures"] += 1
             self._state["status"]["consecutive_successes"] = 0
+            # Increment circuit breaker counter
+            self._model_failures[model_name] += 1
+            if self._model_failures[model_name] >= CIRCUIT_BREAKER_THRESHOLD:
+                print(f"   [Budget] ⚠️ Circuit breaker OPEN for {model_name} (failed {self._model_failures[model_name]} times). Skipping this model for the rest of the run.")
 
         self._save_state()
 
