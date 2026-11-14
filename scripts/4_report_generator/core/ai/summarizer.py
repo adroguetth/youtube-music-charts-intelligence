@@ -113,6 +113,12 @@ class TableSummarizer:
             data = response.json()
             summary = data["choices"][0]["message"]["content"].strip()
             tokens_used = data.get("usage", {}).get("total_tokens", 0)
+
+            # Validate response to catch model refusals (e.g., "I'm unable to...")
+            refusal_phrases = ["unable to", "cannot", "i'm sorry", "i am sorry"]
+            if not summary or len(summary) < 20 or any(phrase in summary.lower() for phrase in refusal_phrases):
+                print("   [Summarizer] Groq returned a refusal or an empty response. Treating as failure.")
+                return "", 0
             
             return summary, tokens_used
             
@@ -150,6 +156,12 @@ class TableSummarizer:
             data = response.json()
             summary = data["candidates"][0]["content"]["parts"][0]["text"].strip()
             tokens_used = data.get("usageMetadata", {}).get("totalTokenCount", 0)
+
+            # Validate response to catch model refusals
+            refusal_phrases = ["unable to", "cannot", "i'm sorry", "i am sorry"]
+            if not summary or len(summary) < 20 or any(phrase in summary.lower() for phrase in refusal_phrases):
+                print("   [Summarizer] Google returned a refusal or an empty response.")
+                return "", 0
             
             return summary, tokens_used
             
