@@ -9,7 +9,8 @@ Responsibilities
 ----------------
 - Read the current budget state from `ai_budget.json`.
 - Reset daily limits if the last run was on a different day.
-- Decide which model (Groq or Google Gemma) to use for table summarization.
+- Decide which model (Groq, Google Gemma, or Meta Muse Spark) to use for
+  table summarization.
 - Record token usage and update the remaining limits.
 - Adjust future limits based on consecutive successes or failures.
 
@@ -18,6 +19,8 @@ Notes
 - The file `ai_budget.json` must exist at the root of the repository.
 - If the file is missing or corrupted, a safe default state is created.
 - The `last_updated` field follows the ISO 8601 format (UTC).
+- Muse Spark is a paid fallback (priority 3). It is only used when both
+  Groq and Google are exhausted or have failed repeatedly.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -37,9 +40,10 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 BUDGET_FILE = _REPO_ROOT / "ai_budget.json"
 
-# Default limits (tokens) for free tiers
+# Default limits (tokens)
 DEFAULT_GROQ_LIMIT = 200_000
 DEFAULT_GOOGLE_LIMIT = 1_500_000
+DEFAULT_MUSE_SPARK_LIMIT = 100_000
 DEFAULT_DEEPSEEK_LIMIT = 500_000
 
 # Margins
@@ -86,10 +90,15 @@ class BudgetManager:
                     "max_daily_limit": DEFAULT_GOOGLE_LIMIT,
                     "priority": 2
                 },
+                "muse_spark": {
+                    "tokens_remaining": DEFAULT_MUSE_SPARK_LIMIT,
+                    "max_daily_limit": DEFAULT_MUSE_SPARK_LIMIT,
+                    "priority": 3
+                },
                 "deepseek_writer": {
                     "tokens_remaining": DEFAULT_DEEPSEEK_LIMIT,
                     "max_daily_limit": DEFAULT_DEEPSEEK_LIMIT,
-                    "priority": 3
+                    "priority": 4
                 }
             }
         }
@@ -126,21 +135,30 @@ class BudgetManager:
     def get_light_model(self) -> str:
         """
         Decide which small model to use for summarization.
-        Tries Groq first. If Groq is exhausted, tries Google.
-        If both are exhausted, returns an empty string.
+        
+        Priority order:
+            1. Groq (fast, free)
+            2. Google Gemma (free, generous daily limit)
+            3. Meta Muse Spark (paid, reliable fallback)
+        
+        If all three are exhausted, returns an empty string.
         """
         self._reset_daily_limits_if_needed()
         
         groq_remaining = self._state["models"]["groq_gpt_oss"]["tokens_remaining"]
         google_remaining = self._state["models"]["google_gemma"]["tokens_remaining"]
+        muse_remaining = self._state["models"]["muse_spark"]["tokens_remaining"]
 
         if groq_remaining > 10_000:
             return "groq_gpt_oss"
         elif google_remaining > 50_000:
             print("   [Budget] Groq is low. Switching to Google Gemma.")
             return "google_gemma"
+        elif muse_remaining > 10_000:
+            print("   [Budget] Both Groq and Google are exhausted. Switching to Meta Muse Spark (paid).")
+            return "muse_spark"
         else:
-            print("   [Budget] WARNING: Both Groq and Google are exhausted. No AI summary will be generated.")
+            print("   [Budget] WARNING: All three models are exhausted. No AI summary will be generated.")
             return ""
 
     def record_usage(self, model_name: str, tokens_used: int, success: bool):
@@ -150,7 +168,7 @@ class BudgetManager:
         Parameters
         ----------
         model_name : str
-            "groq_gpt_oss" or "google_gemma"
+            "groq_gpt_oss", "google_gemma", or "muse_spark"
         tokens_used : int
             Approximate tokens consumed (input + output).
         success : bool
