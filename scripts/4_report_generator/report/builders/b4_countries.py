@@ -9,6 +9,7 @@ Responsibilities
 - Subsection 4.1: Top 10 countries by song count (table + bar chart).
 - Subsection 4.2: Top 10 countries by total likes (table + bar chart).
 - Subsection 4.3: Top 5 songs for the top 5 countries (tables only).
+- Inject AI insights after each subsection (if provided).
 
 Notes
 -----
@@ -16,6 +17,8 @@ Notes
 - Uses theme colors to maintain visual consistency.
 - The Top 5 songs subsection iterates over the top 5 countries to avoid
   an excessively long notebook output.
+- AI insights are injected by the builder itself (not by `notebook.py`)
+  to allow per-subsection placement.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -30,7 +33,12 @@ from nbformat.v4 import new_code_cell, new_markdown_cell
 from report.titles import section_title
 
 
-def build_countries(df: pd.DataFrame, period, language: str) -> list:
+def build_countries(
+    df: pd.DataFrame,
+    period,
+    language: str,
+    insights: dict[str, str] | None = None,
+) -> list:
     """
     Build the Country Analysis section.
 
@@ -42,19 +50,33 @@ def build_countries(df: pd.DataFrame, period, language: str) -> list:
         The reporting period.
     language : str
         ``"en"`` or ``"es"``.
+    insights : dict[str, str] or None
+        Optional mapping of ``section_id -> markdown_text``. If provided,
+        the insight for each subsection is injected right after its cells.
 
     Returns
     -------
     list
         A list of `nbformat` cells.
     """
-    return [
-        new_markdown_cell(section_title("countries", language)),
+    cells: list = []
 
-        # ----------------------------------------------------------------------
-        # 4.1 Top Countries by Song Count
-        # ----------------------------------------------------------------------
-        new_markdown_cell("### 4.1. Top Countries by Song Count" if language == "en" else "### 4.1. Top Países por Cantidad de Canciones"),
+    # ========================================================================
+    # Section title
+    # ========================================================================
+    cells.append(new_markdown_cell(section_title("countries", language)))
+
+    # ========================================================================
+    # 4.1 Top Countries by Song Count
+    # ========================================================================
+    cells.append(
+        new_markdown_cell(
+            "### 4.1. Top Countries by Song Count"
+            if language == "en"
+            else "### 4.1. Top Países por Cantidad de Canciones"
+        )
+    )
+    cells.append(
         new_code_cell(
             "top_countries = (df\n"
             "    .groupby('artist_country')\n"
@@ -80,12 +102,22 @@ def build_countries(df: pd.DataFrame, period, language: str) -> list:
             "add_bar_labels(ax, fmt='{:.0f}', horizontal=True)\n"
             "\n"
             "plt.tight_layout(); plt.show()"
-        ),
+        )
+    )
+    if insights and insights.get("countries_by_songs"):
+        cells.append(new_markdown_cell(insights["countries_by_songs"]))
 
-        # ----------------------------------------------------------------------
-        # 4.2 Top Countries by Total Likes
-        # ----------------------------------------------------------------------
-        new_markdown_cell("### 4.2. Top Countries by Total Likes" if language == "en" else "### 4.2. Top Países por Total de Likes"),
+    # ========================================================================
+    # 4.2 Top Countries by Total Likes
+    # ========================================================================
+    cells.append(
+        new_markdown_cell(
+            "### 4.2. Top Countries by Total Likes"
+            if language == "en"
+            else "### 4.2. Top Países por Total de Likes"
+        )
+    )
+    cells.append(
         new_code_cell(
             "top_likes = (df\n"
             "    .groupby('artist_country')['likes']\n"
@@ -123,12 +155,22 @@ def build_countries(df: pd.DataFrame, period, language: str) -> list:
             "                format_likes(width), ha='left', va='center', fontsize=11, color=YT_TEXT)\n"
             "\n"
             "plt.tight_layout(); plt.show()"
-        ),
+        )
+    )
+    if insights and insights.get("countries_by_likes"):
+        cells.append(new_markdown_cell(insights["countries_by_likes"]))
 
-        # ----------------------------------------------------------------------
-        # 4.3 Top 5 Songs by Top 5 Countries
-        # ----------------------------------------------------------------------
-        new_markdown_cell("### 4.3. Top 5 Songs by Top 5 Countries" if language == "en" else "### 4.3. Top 5 Canciones por los 5 Primeros Países"),
+    # ========================================================================
+    # 4.3 Top 5 Songs by Top 5 Countries
+    # ========================================================================
+    cells.append(
+        new_markdown_cell(
+            "### 4.3. Top 5 Songs by Top 5 Countries"
+            if language == "en"
+            else "### 4.3. Top 5 Canciones por los 5 Primeros Países"
+        )
+    )
+    cells.append(
         new_code_cell(
             "# Limit to top 5 countries\n"
             "top_countries_list = df['artist_country'].value_counts().head(5).index.tolist()\n"
@@ -153,5 +195,9 @@ def build_countries(df: pd.DataFrame, period, language: str) -> list:
             "    display(top_likes_country)\n"
             "\n"
             "display(HTML(f'<hr style=\"border: 1px solid {YT_GRID}; margin: 20px 0;\">'))"
-        ),
-    ]
+        )
+    )
+    if insights and insights.get("countries_top_songs"):
+        cells.append(new_markdown_cell(insights["countries_top_songs"]))
+
+    return cells
