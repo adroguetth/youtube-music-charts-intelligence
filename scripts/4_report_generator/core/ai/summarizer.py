@@ -5,7 +5,7 @@ Reads a DataFrame in Markdown format and generates a structured summary using
 AI models with a three-tier fallback chain:
     1. Groq (GPT-OSS-120B) - fast, free
     2. Google (Gemma 4) - free, generous daily limit
-    3. Meta (Muse Spark, reasoning effort low) - paid, reliable fallback
+    3. Meta (Muse Spark 1.3 Contributor, reasoning effort low) - paid, reliable
 
 Responsibilities
 ----------------
@@ -22,6 +22,8 @@ Notes
 - It expects API keys to be configured in the environment variables
   (`GROQ_API_KEY`, `GOOGLE_API_KEY`, and `META_API_KEY`).
 - If all three models fail, it returns an empty string so the pipeline continues.
+- The prompt is intentionally flexible to avoid model refusals on tables
+  that don't have a clear "leader" or "second place" (e.g., temporal analysis).
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -35,30 +37,30 @@ import time
 import requests
 
 # ============================================================================
-# PROMPT TEMPLATES
+# PROMPT TEMPLATES (flexible to avoid refusals)
 # ============================================================================
-# Instruct the model to extract facts and do calculations, NOT to write prose.
-# The final analytical writing is handled by DeepSeek in the next step.
 PROMPTS = {
     "es": (
         "Eres un analista de datos. Tu única tarea es extraer los hechos clave de esta tabla:\n\n"
         "{table}\n\n"
         "Escribe un resumen estructurado en viñetas (bullet points) con las siguientes reglas:\n"
-        "1. **Líder:** Quién es el número 1 en la métrica principal y cuál es su cifra exacta.\n"
-        "2. **Comparativa:** Cuál es la diferencia numérica o porcentual entre el 1º y el 2º lugar.\n"
+        "1. **Dato más relevante:** Menciona el dato más alto o más importante de la tabla (con su cifra exacta).\n"
+        "2. **Tendencia general:** Describe la tendencia o el contraste más notable (ej. quién sube, quién baja, qué grupo domina).\n"
         "3. **Contexto:** Menciona la cifra total o el promedio general si aplica.\n"
-        "4. **Anomalía:** Destaca un dato que rompa la tendencia (ej. alguien con pocas vistas pero mucho engagement).\n"
-        "Sé directo, usa los números exactos de la tabla y no uses lenguaje poético."
+        "4. **Observación:** Destaca cualquier dato que rompa la tendencia (ej. un valor atípico, un empate, una caída abrupta).\n"
+        "Sé directo, usa los números exactos de la tabla y no uses lenguaje poético. "
+        "Si la tabla no tiene un 'líder' claro, describe el patrón general sin inventar datos."
     ),
     "en": (
         "You are a data analyst. Your only task is to extract key facts from this table:\n\n"
         "{table}\n\n"
         "Write a structured bullet-point summary with the following rules:\n"
-        "1. **Leader:** Who is number 1 in the main metric and what is their exact figure.\n"
-        "2. **Comparison:** What is the numerical or percentage gap between 1st and 2nd place.\n"
+        "1. **Most relevant data point:** Mention the highest or most important figure in the table (with its exact number).\n"
+        "2. **General trend:** Describe the most notable trend or contrast (e.g., who rises, who falls, which group dominates).\n"
         "3. **Context:** Mention the total figure or overall average if applicable.\n"
-        "4. **Anomaly:** Highlight a data point that breaks the trend (e.g., someone with low views but high engagement).\n"
-        "Be direct, use exact numbers from the table, and do not use poetic language."
+        "4. **Observation:** Highlight any data point that breaks the trend (e.g., an outlier, a tie, an abrupt drop).\n"
+        "Be direct, use exact numbers from the table, and do not use poetic language. "
+        "If the table has no clear 'leader', describe the general pattern without inventing data."
     )
 }
 
@@ -146,7 +148,7 @@ class TableSummarizer:
     # GOOGLE (Gemma)
     # ========================================================================
     def _summarize_with_google(self, table_markdown: str, language: str) -> tuple[str, int]:
-        """Call Google API (Gemma 4)."""
+        """Call Google API (Gemma 4) with one retry on error 500."""
         if not self.google_api_key:
             print("   [Summarizer] No Google API key found.")
             return "", 0
@@ -155,51 +157,62 @@ class TableSummarizer:
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:generateContent?key={self.google_api_key}"
 
-        try:
-            response = requests.post(
-                url,
-                headers={"Content-Type": "application/json"},
-                json={
-                    "contents": [{"parts": [{"text": prompt}]}]
-                },
-                timeout=90,  # Increased from 60 to 90 seconds
-            )
+        # Try up to 2 times (1 initial + 1 retry)
+        for attempt in range(1, 3):
+            try:
+                response = requests.post(
+                    url,
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "contents": [{"parts": [{"text": prompt}]}]
+                    },
+                    timeout=120,  # Increased from 90 to 120 seconds
+                )
 
-            if response.status_code != 200:
-                print(f"   [Summarizer] Google Error {response.status_code}: {response.text[:200]}")
+                if response.status_code != 200:
+                    print(f"   [Summarizer] Google Error {response.status_code} (attempt {attempt}/2): {response.text[:200]}")
+                    if attempt == 1 and response.status_code == 500:
+                        print("   [Summarizer] Retrying in 5 seconds...")
+                        time.sleep(5)
+                        continue
+                    return "", 0
+
+                data = response.json()
+                summary = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                tokens_used = data.get("usageMetadata", {}).get("totalTokenCount", 0)
+
+                # Validate response to catch model refusals
+                refusal_phrases = ["unable to", "cannot", "i'm sorry", "i am sorry"]
+                if not summary or len(summary) < 20 or any(phrase in summary.lower() for phrase in refusal_phrases):
+                    print("   [Summarizer] Google returned a refusal or an empty response.")
+                    return "", 0
+
+                return summary, tokens_used
+
+            except Exception as e:
+                print(f"   [Summarizer] Google Exception (attempt {attempt}/2): {e}")
+                if attempt == 1:
+                    time.sleep(5)
+                    continue
                 return "", 0
 
-            data = response.json()
-            summary = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            tokens_used = data.get("usageMetadata", {}).get("totalTokenCount", 0)
-
-            # Validate response to catch model refusals
-            refusal_phrases = ["unable to", "cannot", "i'm sorry", "i am sorry"]
-            if not summary or len(summary) < 20 or any(phrase in summary.lower() for phrase in refusal_phrases):
-                print("   [Summarizer] Google returned a refusal or an empty response.")
-                return "", 0
-
-            return summary, tokens_used
-
-        except Exception as e:
-            print(f"   [Summarizer] Google Exception: {e}")
-            return "", 0
+        return "", 0
 
     # ========================================================================
-    # META (Muse Spark, reasoning effort low)
+    # META (Muse Spark 1.3 Contributor, reasoning effort low)
     # ========================================================================
     def _summarize_with_muse_spark(self, table_markdown: str, language: str) -> tuple[str, int]:
-        """Call Meta Muse Spark API (reasoning effort low)."""
+        """Call Meta Muse Spark API (Contributor mode, reasoning effort low)."""
         if not self.meta_api_key:
             print("   [Summarizer] No Meta API key found.")
             return "", 0
 
         prompt = PROMPTS.get(language, PROMPTS["es"]).format(table=table_markdown)
 
-        # NOTE: Adjust the URL and payload format to match the actual
-        # Meta Muse Spark API. The example below assumes an OpenAI-compatible
-        # endpoint (similar to Groq), but this may need to be adapted.
-        url = "https://api.meta.com/v1/chat/completions"  # <-- ADJUST THIS
+        # URL and model per Meta's documentation:
+        # https://dev.meta.ai/docs/muse-spark
+        url = "https://api.meta.ai/v1/chat/completions"
+        model_id = "muse-spark-1.3-contributor"
 
         try:
             response = requests.post(
@@ -209,13 +222,13 @@ class TableSummarizer:
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "muse-spark-1.3-contributor",  # <-- ADJUST THIS
+                    "model": model_id,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.1,
                     "max_tokens": 500,
-                    "reasoning_effort": "low",  # <-- ADJUST THIS
+                    "reasoning_effort": "low",
                 },
-                timeout=120,  # Generous timeout for paid fallback
+                timeout=120,
             )
 
             if response.status_code != 200:
