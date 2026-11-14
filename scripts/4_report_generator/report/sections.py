@@ -27,6 +27,10 @@ Notes
   generalised into a `SECTION_SETS` mapping keyed by period kind, and
   `BUILDERS` will grow with the monthly-only builders. No builder that
   exists today will need to change.
+- In v2.0, every builder accepts an optional `insights` dict as its
+  fourth argument. Builders that support per-subsection injection consume
+  the dict internally; the rest ignore it and let `notebook.py` inject
+  the insight at the end of the section.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -72,7 +76,7 @@ WEEKLY_SECTIONS: list[str] = [
 # BUILDER REGISTRY
 # ============================================================================
 # Each builder has the signature:
-#     builder(df, period, language) -> list[nbformat.cells]
+#     builder(df, period, language, insights=None) -> list[nbformat.cells]
 BUILDERS: dict[str, Callable] = {
     "intro": build_intro,
     "general_stats": build_general_stats,
