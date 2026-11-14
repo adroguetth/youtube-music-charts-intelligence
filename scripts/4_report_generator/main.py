@@ -130,8 +130,8 @@ def _generate_ai_insights(df: pd.DataFrame, period_label: str, language: str, us
             logger.warning(f"      [AI] Failed to summarize {section}. Skipping.")
             continue
 
-        # 4. Polish with DeepSeek
-        final_text, tokens_writer = writer.polish(raw_summary, language)
+        # 4. Polish with DeepSeek (FIX: Pass 'section' as the first argument)
+        final_text, tokens_writer = writer.polish(section, raw_summary, language)
         
         # 5. Record usage and save to cache
         budget.record_usage(model_used, tokens_summary, success=True)
