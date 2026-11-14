@@ -20,9 +20,13 @@ Notes
   `from report.setup import build_setup`), not relative. In script mode,
   `report` is a top-level module on `sys.path`; relative imports raise
   ``ImportError: attempted relative import beyond top-level package``.
-- AI-generated insights (v2.0) will be injected here, between a
-  section's cells and the next section's header, via an optional
-  `insights` parameter. The v1.0 signature stays compatible:
+- AI-generated insights (v2.0) are passed to each builder as the
+  `insights` argument. Builders that support per-subsection injection
+  (countries, genre_analysis, top_songs, video_metrics, temporal_analysis,
+  collaborations) consume the dict internally. For the remaining sections
+  (general_stats, continents), the insight is injected at the end of the
+  section by this module.
+- The v1.0 signature stays compatible:
   `generate_notebook(df, period, output_path, language, insights=None)`.
 - The setup cell is emitted once, before the first section, by
   `setup.build_setup`. It is not part of `WEEKLY_SECTIONS` and must
@@ -44,6 +48,22 @@ from nbformat.v4 import new_markdown_cell, new_notebook
 from report.sections import BUILDERS, WEEKLY_SECTIONS
 from report.setup import build_setup
 from report.titles import notebook_title
+
+
+# ============================================================================
+# SECTIONS WITH INTERNAL INSIGHT INJECTION
+# ============================================================================
+# These sections have builders that inject their own insights after each
+# subsection. `notebook.py` must NOT inject an insight at the end for them,
+# or the insight will be duplicated.
+_SECTIONS_WITH_INTERNAL_INSIGHTS: frozenset[str] = frozenset({
+    "countries",
+    "genre_analysis",
+    "top_songs",
+    "video_metrics",
+    "temporal_analysis",
+    "collaborations",
+})
 
 
 # ============================================================================
@@ -72,8 +92,10 @@ def generate_notebook(
         ``"en"`` or ``"es"``.
     insights : dict[str, str] or None
         Optional mapping of ``section_id -> markdown_text``. When provided,
-        each insight is emitted as a markdown cell right after that
-        section's cells. Reserved for v2.0; ignored in v1.0.
+        it is passed to each builder. Sections with internal injection
+        (see `_SECTIONS_WITH_INTERNAL_INSIGHTS`) consume it directly;
+        the remaining sections receive their insight at the end of the
+        section from this function.
 
     Notes
     -----
@@ -83,7 +105,8 @@ def generate_notebook(
         [setup cell]
         for each section in WEEKLY_SECTIONS:
             [section cells from builder]
-            [optional insight markdown cell]
+            [optional insight markdown cell]  # only for sections without
+                                              # internal injection
     """
     nb = new_notebook()
     nb.metadata = _kernel_metadata()
@@ -93,9 +116,13 @@ def generate_notebook(
 
     for section in WEEKLY_SECTIONS:
         builder = BUILDERS[section]
-        nb.cells.extend(builder(df, period, language))
-        if insights and insights.get(section):
-            nb.cells.append(new_markdown_cell(insights[section]))
+        nb.cells.extend(builder(df, period, language, insights))
+
+        # Only inject the insight at the end for sections whose builders
+        # do NOT already handle it internally.
+        if section not in _SECTIONS_WITH_INTERNAL_INSIGHTS:
+            if insights and insights.get(section):
+                nb.cells.append(new_markdown_cell(insights[section]))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
