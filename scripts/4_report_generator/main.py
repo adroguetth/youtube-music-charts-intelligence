@@ -36,6 +36,7 @@ from config import (
     DEEPSEEK_API_KEY,
     GOOGLE_API_KEY,
     GROQ_API_KEY,
+    META_API_KEY,
     logger,
     notebook_dir,
 )
@@ -90,7 +91,11 @@ def _generate_ai_insights(df: pd.DataFrame, period_label: str, language: str, us
     # Initialize components
     cache = AICache()
     budget = BudgetManager()
-    summarizer = TableSummarizer(groq_api_key=GROQ_API_KEY, google_api_key=GOOGLE_API_KEY)
+    summarizer = TableSummarizer(
+        groq_api_key=GROQ_API_KEY,
+        google_api_key=GOOGLE_API_KEY,
+        meta_api_key=META_API_KEY,
+    )
     writer = DeepSeekWriter(api_key=DEEPSEEK_API_KEY)
 
     insights = {}
@@ -256,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     use_ai = not args.no_ai
 
-    if use_ai and not (GROQ_API_KEY or GOOGLE_API_KEY or DEEPSEEK_API_KEY):
+    if use_ai and not (GROQ_API_KEY or GOOGLE_API_KEY or DEEPSEEK_API_KEY or META_API_KEY):
         logger.warning("   ⚠️  No AI API keys found. AI insights will be disabled.")
         use_ai = False
 
