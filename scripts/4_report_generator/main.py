@@ -1,5 +1,5 @@
 """
-Main - Entry Point for the Weekly Report Generator (v2.0)
+Main - Entry Point for the Weekly Report Generator
 ============================================================================
 Command-line entry point for the `4_report_generator` package.
 
@@ -95,10 +95,10 @@ def _generate_ai_insights(df: pd.DataFrame, period_label: str, language: str, us
 
     insights = {}
 
-    # Sections that will have AI analysis (excluding intro, exec_summary, and list-only sections)
+    # Sections that will have AI analysis (including top_songs)
     ai_sections = [
         "general_stats", "continents", "countries", "genre_analysis", 
-        "video_metrics", "temporal_analysis", "collaborations"
+        "top_songs", "video_metrics", "temporal_analysis", "collaborations"
     ]
 
     for section in ai_sections:
@@ -115,6 +115,7 @@ def _generate_ai_insights(df: pd.DataFrame, period_label: str, language: str, us
         # 2. Generate Markdown table (limited to save tokens)
         table_md = _get_table_markdown_for_section(df, section)
         if not table_md:
+            logger.warning(f"      [AI] No table generated for {section}. Skipping.")
             continue
 
         # 3. Decide model and summarize
@@ -152,7 +153,7 @@ def _get_table_markdown_for_section(df: pd.DataFrame, section: str) -> str:
     Keeps tables small (head 5-10) to save tokens.
     """
     try:
-        # Ensure 'continent' column exists (the fix from before)
+        # Ensure 'continent' column exists
         if 'continent' not in df.columns:
             continents_map = {
                 'North America': ['United States', 'Mexico', 'Canada', 'Puerto Rico'],
@@ -199,14 +200,31 @@ def _get_table_markdown_for_section(df: pd.DataFrame, section: str) -> str:
             return t.to_markdown(index=False)
             
         elif section == "genre_analysis":
-            t = df.groupby('macro_genre').agg(songs=('track_name', 'count'), views=('views', 'sum')).reset_index().sort_values('songs', ascending=False).head(10)
+            # Agregamos engagement para que la IA pueda comparar popularidad vs fidelidad
+            t = df.groupby('macro_genre').agg(songs=('track_name', 'count'), views=('views', 'sum'), engagement=('engagement', 'mean')).reset_index().sort_values('songs', ascending=False).head(10)
             t['views'] = t['views'].apply(fmt_num)
+            t['engagement'] = t['engagement'].round(1).astype(str) + '%'
+            return t.to_markdown(index=False)
+
+        elif section == "top_songs":
+            # Top 10 canciones por vistas para que la IA analice el rendimiento individual
+            t = df.nlargest(10, 'views')[['track_name', 'artist_names', 'views', 'likes', 'engagement']].copy()
+            t['views'] = t['views'].apply(fmt_num)
+            t['likes'] = t['likes'].apply(fmt_num)
+            t['engagement'] = t['engagement'].round(1).astype(str) + '%'
             return t.to_markdown(index=False)
             
         elif section == "video_metrics":
-            t = df.groupby('channel_type').agg(songs=('track_name', 'count'), views=('views', 'sum')).reset_index().sort_values('songs', ascending=False)
-            t['views'] = t['views'].apply(fmt_num)
-            return t.to_markdown(index=False)
+            # Agregamos vistas promedio, engagement y datos de duración
+            t = df.groupby('channel_type').agg(songs=('track_name', 'count'), avg_views=('views', 'mean'), avg_engagement=('engagement', 'mean')).reset_index().sort_values('songs', ascending=False)
+            t['avg_views'] = t['avg_views'].apply(fmt_num)
+            t['avg_engagement'] = t['avg_engagement'].round(1).astype(str) + '%'
+            
+            dur_stats = pd.DataFrame({
+                "Metric": ["Avg Duration (min)", "Median Duration (min)", "Max Duration (min)"],
+                "Value": [f"{df['duration_s'].mean()/60:.1f}", f"{df['duration_s'].median()/60:.1f}", f"{df['duration_s'].max()/60:.1f}"]
+            })
+            return f"Channel Types:\n{t.to_markdown(index=False)}\n\nDuration Stats:\n{dur_stats.to_markdown(index=False)}"
             
         elif section == "temporal_analysis":
             t = df.groupby('upload_quarter').agg(songs=('track_name', 'count'), views=('views', 'sum')).reset_index()
