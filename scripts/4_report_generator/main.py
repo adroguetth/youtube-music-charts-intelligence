@@ -80,7 +80,7 @@ def _resolve_week_label(args: argparse.Namespace) -> str:
 # ============================================================================
 def _generate_ai_insights(df: pd.DataFrame, period_label: str, language: str, use_ai: bool) -> dict[str, str]:
     """
-    Generates the AI insights for each section.
+    Generates the AI insights for each subsection.
     Returns a dictionary mapping section_id -> markdown_text.
     """
     if not use_ai:
@@ -100,16 +100,32 @@ def _generate_ai_insights(df: pd.DataFrame, period_label: str, language: str, us
 
     insights = {}
 
-    # Sections that will have AI analysis (including top_songs)
+    # Subsection IDs that will have AI analysis
     ai_sections = [
-        "general_stats", "continents", "countries", "genre_analysis", 
-        "top_songs", "video_metrics", "temporal_analysis", "collaborations"
+        "general_stats",
+        "continents",
+        "countries_by_songs",
+        "countries_by_likes",
+        "countries_top_songs",
+        "genre_stats",
+        "genre_treemap",
+        "genre_engagement",
+        "top_songs_by_views",
+        "top_songs_by_likes",
+        "top_songs_by_engagement",
+        "video_summary",
+        "video_views",
+        "video_engagement",
+        "video_duration",
+        "video_channels",
+        "temporal_views",
+        "temporal_engagement",
+        "temporal_releases",
+        "collab_views",
+        "collab_engagement",
     ]
 
     for section in ai_sections:
-        if section not in WEEKLY_SECTIONS:
-            continue
-
         # 1. Check Cache
         cached_data = cache.get(period_label, section, language)
         if cached_data:
@@ -135,7 +151,7 @@ def _generate_ai_insights(df: pd.DataFrame, period_label: str, language: str, us
             logger.warning(f"      [AI] Failed to summarize {section}. Skipping.")
             continue
 
-        # 4. Polish with DeepSeek (FIX: Pass 'section' as the first argument)
+        # 4. Polish with DeepSeek (pass 'section' as the first argument)
         final_text, tokens_writer = writer.polish(section, raw_summary, language)
         
         # 5. Record usage and save to cache
@@ -154,11 +170,11 @@ def _generate_ai_insights(df: pd.DataFrame, period_label: str, language: str, us
 
 def _get_table_markdown_for_section(df: pd.DataFrame, section: str) -> str:
     """
-    Calculates the specific table for a section and returns it as Markdown.
+    Calculates the specific table for a subsection and returns it as Markdown.
     Keeps tables small (head 5-10) to save tokens.
     """
     try:
-        # Ensure 'continent' column exists
+        # Ensure 'continent' column exists (needed for 'continents')
         if 'continent' not in df.columns:
             continents_map = {
                 'North America': ['United States', 'Mexico', 'Canada', 'Puerto Rico'],
@@ -184,6 +200,9 @@ def _get_table_markdown_for_section(df: pd.DataFrame, section: str) -> str:
                 return f"{x:,.0f}"
             except: return str(x)
 
+        # ====================================================================
+        # SECTION 2: General Statistics
+        # ====================================================================
         if section == "general_stats":
             total_views = df['views'].sum()
             total_likes = df['likes'].sum()
@@ -193,56 +212,158 @@ def _get_table_markdown_for_section(df: pd.DataFrame, section: str) -> str:
                 "Value": [len(df), df['artist_country'].nunique(), df['macro_genre'].nunique(), fmt_num(total_views), fmt_num(total_likes), f"{eng_rate:.1f}%"]
             })
             return stats.to_markdown(index=False)
-            
+
+        # ====================================================================
+        # SECTION 3: Continents
+        # ====================================================================
         elif section == "continents":
             t = df.groupby('continent').agg(songs=('track_name', 'count'), views=('views', 'sum')).reset_index().sort_values('songs', ascending=False)
             t['views'] = t['views'].apply(fmt_num)
             return t.to_markdown(index=False)
-            
-        elif section == "countries":
-            t = df.groupby('artist_country').agg(songs=('track_name', 'count'), views=('views', 'sum')).reset_index().sort_values('songs', ascending=False).head(10)
-            t['views'] = t['views'].apply(fmt_num)
+
+        # ====================================================================
+        # SECTION 4: Countries
+        # ====================================================================
+        elif section == "countries_by_songs":
+            t = df.groupby('artist_country').agg(songs=('track_name', 'count')).reset_index().sort_values('songs', ascending=False).head(10)
             return t.to_markdown(index=False)
-            
-        elif section == "genre_analysis":
-            # Agregamos engagement para que la IA pueda comparar popularidad vs fidelidad
+
+        elif section == "countries_by_likes":
+            t = df.groupby('artist_country').agg(likes=('likes', 'sum')).reset_index().sort_values('likes', ascending=False).head(10)
+            t['likes'] = t['likes'].apply(fmt_num)
+            return t.to_markdown(index=False)
+
+        elif section == "countries_top_songs":
+            # For this section, we just send a small sample of top songs per country
+            top_countries = df['artist_country'].value_counts().head(5).index.tolist()
+            rows = []
+            for country in top_countries:
+                df_country = df[df['artist_country'] == country]
+                top_song = df_country.nlargest(1, 'views')[['track_name', 'artist_names', 'views']].iloc[0]
+                rows.append({
+                    "Country": country,
+                    "Top Song": top_song['track_name'],
+                    "Artist": top_song['artist_names'],
+                    "Views": fmt_num(top_song['views'])
+                })
+            return pd.DataFrame(rows).to_markdown(index=False)
+
+        # ====================================================================
+        # SECTION 5: Genre Analysis
+        # ====================================================================
+        elif section == "genre_stats":
             t = df.groupby('macro_genre').agg(songs=('track_name', 'count'), views=('views', 'sum'), engagement=('engagement', 'mean')).reset_index().sort_values('songs', ascending=False).head(10)
             t['views'] = t['views'].apply(fmt_num)
             t['engagement'] = t['engagement'].round(1).astype(str) + '%'
             return t.to_markdown(index=False)
 
-        elif section == "top_songs":
-            # Top 10 canciones por vistas para que la IA analice el rendimiento individual
-            t = df.nlargest(10, 'views')[['track_name', 'artist_names', 'views', 'likes', 'engagement']].copy()
+        elif section == "genre_treemap":
+            # Same table as genre_stats but perhaps sorted differently
+            t = df.groupby('macro_genre').agg(songs=('track_name', 'count')).reset_index().sort_values('songs', ascending=False).head(15)
+            return t.to_markdown(index=False)
+
+        elif section == "genre_engagement":
+            t = df.groupby('macro_genre').agg(engagement=('engagement', 'mean')).reset_index().sort_values('engagement', ascending=False).head(10)
+            t['engagement'] = t['engagement'].round(1).astype(str) + '%'
+            return t.to_markdown(index=False)
+
+        # ====================================================================
+        # SECTION 6: Song Metrics
+        # ====================================================================
+        elif section == "top_songs_by_views":
+            t = df.nlargest(10, 'views')[['track_name', 'artist_names', 'views', 'engagement']].copy()
             t['views'] = t['views'].apply(fmt_num)
+            t['engagement'] = t['engagement'].round(1).astype(str) + '%'
+            return t.to_markdown(index=False)
+
+        elif section == "top_songs_by_likes":
+            t = df.nlargest(10, 'likes')[['track_name', 'artist_names', 'likes', 'engagement']].copy()
             t['likes'] = t['likes'].apply(fmt_num)
             t['engagement'] = t['engagement'].round(1).astype(str) + '%'
             return t.to_markdown(index=False)
-            
-        elif section == "video_metrics":
-            # Agregamos vistas promedio, engagement y datos de duración
-            t = df.groupby('channel_type').agg(songs=('track_name', 'count'), avg_views=('views', 'mean'), avg_engagement=('engagement', 'mean')).reset_index().sort_values('songs', ascending=False)
-            t['avg_views'] = t['avg_views'].apply(fmt_num)
-            t['avg_engagement'] = t['avg_engagement'].round(1).astype(str) + '%'
-            
+
+        elif section == "top_songs_by_engagement":
+            t = df.nlargest(10, 'engagement')[['track_name', 'artist_names', 'views', 'engagement']].copy()
+            t['views'] = t['views'].apply(fmt_num)
+            t['engagement'] = t['engagement'].round(1).astype(str) + '%'
+            return t.to_markdown(index=False)
+
+        # ====================================================================
+        # SECTION 7: Video Metrics
+        # ====================================================================
+        elif section == "video_summary":
+            video_stats = {
+                'Category': ['Official Videos', 'Lyric Videos', 'Live Performances', 'Collaborations'],
+                'Count': [df['is_official_video'].sum(), df['is_lyric_video'].sum(), df['is_live_performance'].sum(), df['is_collaboration'].sum()]
+            }
+            v_stats_df = pd.DataFrame(video_stats)
+            v_stats_df['Percentage'] = (v_stats_df['Count'] / len(df) * 100).round(1).astype(str) + '%'
+            return v_stats_df.to_markdown(index=False)
+
+        elif section == "video_views":
+            df_video = df.copy()
+            conditions = [df_video['is_official_video'] == 1, df_video['is_lyric_video'] == 1, df_video['is_live_performance'] == 1]
+            choices = ['Official', 'Lyric', 'Live']
+            df_video['video_type'] = pd.Series(np.select(conditions, choices, default='Other'), index=df_video.index)
+            views_stats = df_video.groupby('video_type').agg(total_videos=('views', 'count'), avg_views=('views', 'mean')).reset_index()
+            views_stats['avg_views'] = views_stats['avg_views'].apply(fmt_num)
+            return views_stats.to_markdown(index=False)
+
+        elif section == "video_engagement":
+            df_video = df.copy()
+            conditions = [df_video['is_official_video'] == 1, df_video['is_lyric_video'] == 1, df_video['is_live_performance'] == 1]
+            choices = ['Official', 'Lyric', 'Live']
+            df_video['video_type'] = pd.Series(np.select(conditions, choices, default='Other'), index=df_video.index)
+            eng_stats = df_video.groupby('video_type').agg(avg_engagement=('engagement', 'mean')).reset_index()
+            eng_stats['avg_engagement'] = eng_stats['avg_engagement'].round(1).astype(str) + '%'
+            return eng_stats.to_markdown(index=False)
+
+        elif section == "video_duration":
             dur_stats = pd.DataFrame({
                 "Metric": ["Avg Duration (min)", "Median Duration (min)", "Max Duration (min)"],
                 "Value": [f"{df['duration_s'].mean()/60:.1f}", f"{df['duration_s'].median()/60:.1f}", f"{df['duration_s'].max()/60:.1f}"]
             })
-            return f"Channel Types:\n{t.to_markdown(index=False)}\n\nDuration Stats:\n{dur_stats.to_markdown(index=False)}"
-            
-        elif section == "temporal_analysis":
+            return dur_stats.to_markdown(index=False)
+
+        elif section == "video_channels":
+            channel_counts = df['channel_type'].value_counts()
+            ch_df = pd.DataFrame({'Channel Type': channel_counts.index, 'Count': channel_counts.values})
+            ch_df['Percentage'] = (ch_df['Count'] / len(df) * 100).round(1).astype(str) + '%'
+            return ch_df.to_markdown(index=False)
+
+        # ====================================================================
+        # SECTION 8: Temporal Analysis
+        # ====================================================================
+        elif section == "temporal_views":
             t = df.groupby('upload_quarter').agg(songs=('track_name', 'count'), views=('views', 'sum')).reset_index()
             t['views'] = t['views'].apply(fmt_num)
             return t.to_markdown(index=False)
-            
-        elif section == "collaborations":
-            t = df.groupby('is_collaboration').agg(songs=('track_name', 'count'), views=('views', 'sum'), engagement=('engagement', 'mean')).reset_index()
-            t['is_collaboration'] = t['is_collaboration'].map({0: 'Solo', 1: 'Collaboration'})
-            t['views'] = t['views'].apply(fmt_num)
-            t['engagement'] = t['engagement'].round(2).astype(str) + '%'
+
+        elif section == "temporal_engagement":
+            t = df.groupby('upload_quarter').agg(engagement=('engagement', 'mean')).reset_index()
+            t['engagement'] = t['engagement'].round(1).astype(str) + '%'
             return t.to_markdown(index=False)
-            
+
+        elif section == "temporal_releases":
+            t = df['upload_quarter'].value_counts().sort_index().reset_index()
+            t.columns = ['Quarter', 'Count']
+            return t.to_markdown(index=False)
+
+        # ====================================================================
+        # SECTION 9: Collaborations
+        # ====================================================================
+        elif section == "collab_views":
+            t = df.groupby('is_collaboration').agg(songs=('track_name', 'count'), avg_views=('views', 'mean')).reset_index()
+            t['is_collaboration'] = t['is_collaboration'].map({0: 'Solo', 1: 'Collaboration'})
+            t['avg_views'] = t['avg_views'].apply(fmt_num)
+            return t.to_markdown(index=False)
+
+        elif section == "collab_engagement":
+            t = df.groupby('is_collaboration').agg(avg_engagement=('engagement', 'mean')).reset_index()
+            t['is_collaboration'] = t['is_collaboration'].map({0: 'Solo', 1: 'Collaboration'})
+            t['avg_engagement'] = t['avg_engagement'].round(1).astype(str) + '%'
+            return t.to_markdown(index=False)
+
     except Exception as e:
         logger.error(f"      [AI] Error building table for {section}: {e}")
     
