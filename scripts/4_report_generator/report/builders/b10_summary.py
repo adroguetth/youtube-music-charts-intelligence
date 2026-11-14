@@ -16,6 +16,10 @@ Notes
   (or right after this cell) by `report.notebook.generate_notebook`.
 - Uses the `general_stats` and `format_number` helpers defined in the
   notebook's SETUP_CODE.
+- The `insights` argument is accepted for signature consistency with
+  other builders but is intentionally ignored: the Executive Summary
+  section has no internal AI-generated analysis. If an insight exists
+  for this section, `notebook.py` will inject it at the end.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -30,7 +34,12 @@ from nbformat.v4 import new_code_cell, new_markdown_cell
 from report.titles import section_title
 
 
-def build_exec_summary(df: pd.DataFrame, period, language: str) -> list:
+def build_exec_summary(
+    df: pd.DataFrame,
+    period,
+    language: str,
+    insights: dict[str, str] | None = None,
+) -> list:
     """
     Build the Executive Summary section.
 
@@ -42,6 +51,10 @@ def build_exec_summary(df: pd.DataFrame, period, language: str) -> list:
         The reporting period.
     language : str
         ``"en"`` or ``"es"``.
+    insights : dict[str, str] or None
+        Optional mapping of ``section_id -> markdown_text``. Ignored in
+        this builder: the Executive Summary section has no internal
+        AI-generated analysis. Accepted for signature consistency.
 
     Returns
     -------
