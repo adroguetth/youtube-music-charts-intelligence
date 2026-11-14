@@ -15,6 +15,9 @@ Notes
 - This builder does not create any code cells or plots.
 - All text is strictly in English inside the code; the bilingual output
   is handled by the `language` parameter and the `titles` registry.
+- The `insights` argument is accepted for signature consistency with
+  other builders but is intentionally ignored: the Introduction section
+  does not have an AI-generated analysis.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -29,7 +32,12 @@ from nbformat.v4 import new_markdown_cell
 from report.titles import section_title
 
 
-def build_intro(df: pd.DataFrame, period, language: str) -> list:
+def build_intro(
+    df: pd.DataFrame,
+    period,
+    language: str,
+    insights: dict[str, str] | None = None,
+) -> list:
     """
     Build the Introduction section.
 
@@ -42,6 +50,10 @@ def build_intro(df: pd.DataFrame, period, language: str) -> list:
         The reporting period.
     language : str
         ``"en"`` or ``"es"``.
+    insights : dict[str, str] or None
+        Optional mapping of ``section_id -> markdown_text``. Ignored in
+        this builder: the Introduction section has no AI-generated
+        analysis. Accepted for signature consistency.
 
     Returns
     -------
