@@ -10,6 +10,7 @@ Responsibilities
 - Subsection 5.2: Genre distribution treemap (keeps multi-color).
 - Subsection 5.3: Top 10 genres by engagement rate (table + bar chart).
 - Subsection 5.4: Country-Genre distribution heatmap (keeps multi-color).
+- Inject AI insights after subsections 5.1, 5.2, and 5.3 (but NOT 5.4).
 
 Notes
 -----
@@ -19,6 +20,8 @@ Notes
 - Uses `style_axes` and `add_bar_labels` for standard charts.
 - The Heatmap retains its `Reds` colormap because color represents data
   density there.
+- AI insights are injected by the builder itself (not by `notebook.py`)
+  to allow per-subsection placement.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -33,7 +36,12 @@ from nbformat.v4 import new_code_cell, new_markdown_cell
 from report.titles import section_title
 
 
-def build_genre_analysis(df: pd.DataFrame, period, language: str) -> list:
+def build_genre_analysis(
+    df: pd.DataFrame,
+    period,
+    language: str,
+    insights: dict[str, str] | None = None,
+) -> list:
     """
     Build the Genre Analysis section.
 
@@ -45,19 +53,33 @@ def build_genre_analysis(df: pd.DataFrame, period, language: str) -> list:
         The reporting period.
     language : str
         ``"en"`` or ``"es"``.
+    insights : dict[str, str] or None
+        Optional mapping of ``section_id -> markdown_text``. If provided,
+        the insight for each subsection is injected right after its cells.
 
     Returns
     -------
     list
         A list of `nbformat` cells.
     """
-    return [
-        new_markdown_cell(section_title("genre_analysis", language)),
+    cells: list = []
 
-        # ----------------------------------------------------------------------
-        # 5.1 Genre Statistics (Table) - FIX: Added missing title
-        # ----------------------------------------------------------------------
-        new_markdown_cell("### 5.1. Genre Statistics" if language == "en" else "### 5.1. Estadísticas por Género"),
+    # ========================================================================
+    # Section title
+    # ========================================================================
+    cells.append(new_markdown_cell(section_title("genre_analysis", language)))
+
+    # ========================================================================
+    # 5.1 Genre Statistics (Table)
+    # ========================================================================
+    cells.append(
+        new_markdown_cell(
+            "### 5.1. Genre Statistics"
+            if language == "en"
+            else "### 5.1. Estadísticas por Género"
+        )
+    )
+    cells.append(
         new_code_cell(
             "genre_stats = (df\n"
             "    .groupby('macro_genre')\n"
@@ -73,12 +95,22 @@ def build_genre_analysis(df: pd.DataFrame, period, language: str) -> list:
             "\n"
             "genre_stats['engagement_rate'] = (genre_stats['total_likes'] / genre_stats['total_views'] * 100).round(2).fillna(0)\n"
             "display(genre_stats.head(10)[['macro_genre', 'total_songs', 'engagement_rate']])"
-        ),
+        )
+    )
+    if insights and insights.get("genre_stats"):
+        cells.append(new_markdown_cell(insights["genre_stats"]))
 
-        # ----------------------------------------------------------------------
-        # 5.2 Genre Distribution Treemap
-        # ----------------------------------------------------------------------
-        new_markdown_cell("### 5.2. Genre Distribution Treemap" if language == "en" else "### 5.2. Treemap de Distribución de Géneros"),
+    # ========================================================================
+    # 5.2 Genre Distribution Treemap
+    # ========================================================================
+    cells.append(
+        new_markdown_cell(
+            "### 5.2. Genre Distribution Treemap"
+            if language == "en"
+            else "### 5.2. Treemap de Distribución de Géneros"
+        )
+    )
+    cells.append(
         new_code_cell(
             "treemap_data = genre_stats.head(15).copy()\n"
             "sizes = treemap_data['total_songs'].values\n"
@@ -112,12 +144,22 @@ def build_genre_analysis(df: pd.DataFrame, period, language: str) -> list:
             "ax.set_title('Genre Distribution by Song Count', fontsize=TITLE_FONT_SIZE, color=YT_TEXT, loc='center', pad=20)\n"
             "ax.axis('off')\n"
             "plt.tight_layout(); plt.show()"
-        ),
+        )
+    )
+    if insights and insights.get("genre_treemap"):
+        cells.append(new_markdown_cell(insights["genre_treemap"]))
 
-        # ----------------------------------------------------------------------
-        # 5.3 Engagement Rate by Genre
-        # ----------------------------------------------------------------------
-        new_markdown_cell("### 5.3. Engagement Rate by Genre" if language == "en" else "### 5.3. Tasa de Engagement por Género"),
+    # ========================================================================
+    # 5.3 Engagement Rate by Genre
+    # ========================================================================
+    cells.append(
+        new_markdown_cell(
+            "### 5.3. Engagement Rate by Genre"
+            if language == "en"
+            else "### 5.3. Tasa de Engagement por Género"
+        )
+    )
+    cells.append(
         new_code_cell(
             "engagement_chart = genre_stats.sort_values('engagement_rate', ascending=False).head(10)\n"
             "\n"
@@ -148,12 +190,22 @@ def build_genre_analysis(df: pd.DataFrame, period, language: str) -> list:
             "    'Genre': ['', '', genre_stats.loc[genre_stats['engagement_rate'].idxmax(), 'macro_genre'], genre_stats.loc[genre_stats['engagement_rate'].idxmin(), 'macro_genre']]\n"
             "})\n"
             "display(stats_summary)"
-        ),
+        )
+    )
+    if insights and insights.get("genre_engagement"):
+        cells.append(new_markdown_cell(insights["genre_engagement"]))
 
-        # ----------------------------------------------------------------------
-        # 5.4 Country-Genre Distribution Heatmap
-        # ----------------------------------------------------------------------
-        new_markdown_cell("### 5.4. Country-Genre Distribution Heatmap" if language == "en" else "### 5.4. Heatmap País-Género"),
+    # ========================================================================
+    # 5.4 Country-Genre Distribution Heatmap (NO INSIGHT)
+    # ========================================================================
+    cells.append(
+        new_markdown_cell(
+            "### 5.4. Country-Genre Distribution Heatmap"
+            if language == "en"
+            else "### 5.4. Heatmap País-Género"
+        )
+    )
+    cells.append(
         new_code_cell(
             "df_analysis = df[~df['artist_country'].isin(['Multi-country', 'Unknown'])]\n"
             "if not df_analysis.empty:\n"
@@ -177,5 +229,8 @@ def build_genre_analysis(df: pd.DataFrame, period, language: str) -> list:
             "        ax.set_ylabel('Country', fontsize=11, color=YT_TEXT)\n"
             "        plt.xticks(rotation=45, ha='right')\n"
             "        plt.tight_layout(); plt.show()"
-        ),
-    ]
+        )
+    )
+    # NOTE: No insight for 5.4 (heatmap), as per design.
+
+    return cells
