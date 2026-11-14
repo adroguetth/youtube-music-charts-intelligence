@@ -8,7 +8,7 @@ Responsibilities
 - Resolve repository paths (archive dir, notebook outputs, caches).
 - Configure a package-level logger with a consistent output format.
 - Provide helpers to resolve language-specific directories.
-- Load environment variables for AI services (Groq, Google, DeepSeek).
+- Load environment variables for AI services (Groq, Google, DeepSeek, Meta).
 
 Notes
 -----
@@ -66,6 +66,7 @@ AI_BUDGET_FILE: Path = REPO_ROOT / "ai_budget.json"
 GROQ_API_KEY: str | None = os.environ.get("GROQ_API_KEY")
 GOOGLE_API_KEY: str | None = os.environ.get("GOOGLE_API_KEY")
 DEEPSEEK_API_KEY: str | None = os.environ.get("DEEPSEEK_API_KEY")
+META_API_KEY: str | None = os.environ.get("META_API_KEY")
 
 # ============================================================================
 # LOGGER
