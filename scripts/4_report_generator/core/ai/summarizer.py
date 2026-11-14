@@ -141,7 +141,7 @@ class TableSummarizer:
             print(f"   [Summarizer] Groq Timeout after 90 seconds.")
             return "", 0
         except Exception as e:
-            print(f"   [Summarizer] Groq Exception: {e}")
+            print(f"   [Summarizer] Groq Exception: {type(e).__name__}: {e}")
             return "", 0
 
     # ========================================================================
@@ -190,7 +190,7 @@ class TableSummarizer:
                 return summary, tokens_used
 
             except Exception as e:
-                print(f"   [Summarizer] Google Exception (attempt {attempt}/2): {e}")
+                print(f"   [Summarizer] Google Exception (attempt {attempt}/2): {type(e).__name__}: {e}")
                 if attempt == 1:
                     time.sleep(5)
                     continue
@@ -248,7 +248,7 @@ class TableSummarizer:
             return summary, tokens_used
 
         except Exception as e:
-            print(f"   [Summarizer] Muse Spark Exception: {e}")
+            print(f"   [Summarizer] Muse Spark Exception: {type(e).__name__}: {e}")
             return "", 0
 
     # ========================================================================
