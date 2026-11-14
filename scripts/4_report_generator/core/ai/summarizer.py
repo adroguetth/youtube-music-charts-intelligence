@@ -1,14 +1,18 @@
 """
-Summarizer - Table Analysis via Free-Tier Models
+Summarizer - Table Analysis via AI Models
 ============================================================================
-Reads a DataFrame in Markdown format and generates a 5-line summary using
-free-tier models (Groq or Google Gemma).
+Reads a DataFrame in Markdown format and generates a structured summary using
+AI models with a three-tier fallback chain:
+    1. Groq (GPT-OSS-120B) - fast, free
+    2. Google (Gemma 4) - free, generous daily limit
+    3. Meta (Muse Spark, reasoning effort low) - paid, reliable fallback
 
 Responsibilities
 ----------------
 - Build the specific prompt for table summarization.
-- Try to summarize using Groq (GPT-OSS-120B) first.
-- Fallback to Google (Gemma 4) if Groq fails or hits its limit.
+- Try to summarize using Groq first.
+- Fallback to Google Gemma if Groq fails or hits its limit.
+- Fallback to Meta Muse Spark if both Groq and Google fail.
 - Return the raw summary string.
 
 Notes
@@ -16,8 +20,8 @@ Notes
 - This module does NOT make decisions about which model to use; it receives
   the model name from `BudgetManager`.
 - It expects API keys to be configured in the environment variables
-  (`GROQ_API_KEY` and `GOOGLE_API_KEY`).
-- If both models fail, it returns an empty string so the pipeline continues.
+  (`GROQ_API_KEY`, `GOOGLE_API_KEY`, and `META_API_KEY`).
+- If all three models fail, it returns an empty string so the pipeline continues.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -60,14 +64,23 @@ PROMPTS = {
 
 
 class TableSummarizer:
-    def __init__(self, groq_api_key: str | None = None, google_api_key: str | None = None):
+    def __init__(
+        self,
+        groq_api_key: str | None = None,
+        google_api_key: str | None = None,
+        meta_api_key: str | None = None,
+    ):
         self.groq_api_key = groq_api_key or os.environ.get("GROQ_API_KEY")
         self.google_api_key = google_api_key or os.environ.get("GOOGLE_API_KEY")
-        
-        # Rate Limiter variables
+        self.meta_api_key = meta_api_key or os.environ.get("META_API_KEY")
+
+        # Rate Limiter variables (for Groq)
         self.last_groq_request_time = 0
         self.groq_cooldown_seconds = 60
 
+    # ========================================================================
+    # GROQ
+    # ========================================================================
     def _summarize_with_groq(self, table_markdown: str, language: str) -> tuple[str, int]:
         """Call Groq API with Rate Limiting protection."""
         if not self.groq_api_key:
@@ -81,23 +94,23 @@ class TableSummarizer:
             time.sleep(4 - time_since_last)
 
         prompt = PROMPTS.get(language, PROMPTS["es"]).format(table=table_markdown)
-        
+
         try:
             response = requests.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={
                     "Authorization": f"Bearer {self.groq_api_key}",
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
                 },
                 json={
                     "model": "openai/gpt-oss-120b",
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.1,
-                    "max_tokens": 500
+                    "max_tokens": 500,
                 },
-                timeout=90
+                timeout=90,
             )
-            
+
             self.last_groq_request_time = time.time()
 
             # Reactive rate limiting (if blocked)
@@ -109,19 +122,19 @@ class TableSummarizer:
             if response.status_code != 200:
                 print(f"   [Summarizer] Groq Error {response.status_code}: {response.text[:200]}")
                 return "", 0
-                
+
             data = response.json()
             summary = data["choices"][0]["message"]["content"].strip()
             tokens_used = data.get("usage", {}).get("total_tokens", 0)
 
-            # Validate response to catch model refusals (e.g., "I'm unable to...")
+            # Validate response to catch model refusals
             refusal_phrases = ["unable to", "cannot", "i'm sorry", "i am sorry"]
             if not summary or len(summary) < 20 or any(phrase in summary.lower() for phrase in refusal_phrases):
                 print("   [Summarizer] Groq returned a refusal or an empty response. Treating as failure.")
                 return "", 0
-            
+
             return summary, tokens_used
-            
+
         except requests.exceptions.Timeout:
             print(f"   [Summarizer] Groq Timeout after 90 seconds.")
             return "", 0
@@ -129,16 +142,19 @@ class TableSummarizer:
             print(f"   [Summarizer] Groq Exception: {e}")
             return "", 0
 
+    # ========================================================================
+    # GOOGLE (Gemma)
+    # ========================================================================
     def _summarize_with_google(self, table_markdown: str, language: str) -> tuple[str, int]:
-        """Call Google API."""
+        """Call Google API (Gemma 4)."""
         if not self.google_api_key:
             print("   [Summarizer] No Google API key found.")
             return "", 0
 
         prompt = PROMPTS.get(language, PROMPTS["es"]).format(table=table_markdown)
-        
+
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:generateContent?key={self.google_api_key}"
-        
+
         try:
             response = requests.post(
                 url,
@@ -146,13 +162,13 @@ class TableSummarizer:
                 json={
                     "contents": [{"parts": [{"text": prompt}]}]
                 },
-                timeout=60
+                timeout=90,  # Increased from 60 to 90 seconds
             )
-            
+
             if response.status_code != 200:
                 print(f"   [Summarizer] Google Error {response.status_code}: {response.text[:200]}")
                 return "", 0
-                
+
             data = response.json()
             summary = data["candidates"][0]["content"]["parts"][0]["text"].strip()
             tokens_used = data.get("usageMetadata", {}).get("totalTokenCount", 0)
@@ -162,32 +178,122 @@ class TableSummarizer:
             if not summary or len(summary) < 20 or any(phrase in summary.lower() for phrase in refusal_phrases):
                 print("   [Summarizer] Google returned a refusal or an empty response.")
                 return "", 0
-            
+
             return summary, tokens_used
-            
+
         except Exception as e:
             print(f"   [Summarizer] Google Exception: {e}")
             return "", 0
 
+    # ========================================================================
+    # META (Muse Spark, reasoning effort low)
+    # ========================================================================
+    def _summarize_with_muse_spark(self, table_markdown: str, language: str) -> tuple[str, int]:
+        """Call Meta Muse Spark API (reasoning effort low)."""
+        if not self.meta_api_key:
+            print("   [Summarizer] No Meta API key found.")
+            return "", 0
+
+        prompt = PROMPTS.get(language, PROMPTS["es"]).format(table=table_markdown)
+
+        # NOTE: Adjust the URL and payload format to match the actual
+        # Meta Muse Spark API. The example below assumes an OpenAI-compatible
+        # endpoint (similar to Groq), but this may need to be adapted.
+        url = "https://api.meta.com/v1/chat/completions"  # <-- ADJUST THIS
+
+        try:
+            response = requests.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {self.meta_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "muse-spark-1.3-contributor",  # <-- ADJUST THIS
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.1,
+                    "max_tokens": 500,
+                    "reasoning_effort": "low",  # <-- ADJUST THIS
+                },
+                timeout=120,  # Generous timeout for paid fallback
+            )
+
+            if response.status_code != 200:
+                print(f"   [Summarizer] Muse Spark Error {response.status_code}: {response.text[:200]}")
+                return "", 0
+
+            data = response.json()
+            summary = data["choices"][0]["message"]["content"].strip()
+            tokens_used = data.get("usage", {}).get("total_tokens", 0)
+
+            # Validate response to catch model refusals
+            refusal_phrases = ["unable to", "cannot", "i'm sorry", "i am sorry"]
+            if not summary or len(summary) < 20 or any(phrase in summary.lower() for phrase in refusal_phrases):
+                print("   [Summarizer] Muse Spark returned a refusal or an empty response.")
+                return "", 0
+
+            return summary, tokens_used
+
+        except Exception as e:
+            print(f"   [Summarizer] Muse Spark Exception: {e}")
+            return "", 0
+
+    # ========================================================================
+    # ROUTER
+    # ========================================================================
     def summarize(self, table_markdown: str, model_name: str, language: str = "es") -> tuple[str, str, int]:
         """
-        Generate a summary from a Markdown table.
+        Generate a summary from a Markdown table, using the specified model
+        and falling back through the chain if needed.
+
+        Parameters
+        ----------
+        table_markdown : str
+            The DataFrame converted to Markdown.
+        model_name : str
+            The model decided by `BudgetManager` ("groq_gpt_oss", "google_gemma",
+            or "muse_spark").
+        language : str
+            "es" or "en".
+
+        Returns
+        -------
+        tuple[str, str, int]
+            (summary_text, model_used, tokens_used)
         """
+        # Attempt 1: Groq
         if model_name == "groq_gpt_oss":
             summary, tokens = self._summarize_with_groq(table_markdown, language)
             if summary:
                 return summary, "groq_gpt_oss", tokens
-            else:
-                print("   [Summarizer] Groq failed. Trying Google Gemma as fallback...")
-                summary, tokens = self._summarize_with_google(table_markdown, language)
-                if summary:
-                    return summary, "google_gemma", tokens
 
+            print("   [Summarizer] Groq failed. Trying Google Gemma as fallback...")
+            summary, tokens = self._summarize_with_google(table_markdown, language)
+            if summary:
+                return summary, "google_gemma", tokens
+
+            print("   [Summarizer] Google failed. Trying Meta Muse Spark as final fallback...")
+            summary, tokens = self._summarize_with_muse_spark(table_markdown, language)
+            if summary:
+                return summary, "muse_spark", tokens
+
+        # Attempt 2: Google
         elif model_name == "google_gemma":
             summary, tokens = self._summarize_with_google(table_markdown, language)
             if summary:
                 return summary, "google_gemma", tokens
-        
-        # If both failed
-        print("   [Summarizer] Both Groq and Google failed to generate a summary.")
+
+            print("   [Summarizer] Google failed. Trying Meta Muse Spark as final fallback...")
+            summary, tokens = self._summarize_with_muse_spark(table_markdown, language)
+            if summary:
+                return summary, "muse_spark", tokens
+
+        # Attempt 3: Muse Spark (explicitly chosen by BudgetManager)
+        elif model_name == "muse_spark":
+            summary, tokens = self._summarize_with_muse_spark(table_markdown, language)
+            if summary:
+                return summary, "muse_spark", tokens
+
+        # All failed
+        print("   [Summarizer] All available models failed to generate a summary.")
         return "", model_name, 0
