@@ -13,10 +13,8 @@ Responsibilities
 Notes
 -----
 - This builder does not create any plots in the current version.
-- The numeric formatting avoids scientific notation (K, M, B suffixes).
-- The `style_axes` helper is not used here yet, but the section is
-  structured so that a chart can be added later without touching other
-  sections.
+- The numeric formatting uses `format_number` from the notebook's
+  SETUP_CODE to avoid scientific notation and trailing zeros.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -53,11 +51,35 @@ def build_general_stats(df: pd.DataFrame, period, language: str) -> list:
         new_markdown_cell(section_title("general_stats", language)),
         new_code_cell(
             # 1. Calculate stats.
-            # 2. Convert the dict to a list of tuples and then to a DataFrame
-            #    with columns 'Metric' and 'Value'.
-            # 3. The global pd.set_option('display.float_format', ...) in
-            #    SETUP_CODE ensures numbers are displayed cleanly.
+            # 2. Build a DataFrame with formatted values.
+            # 3. Display it.
             "stats = general_stats(df)\n"
-            "display(pd.DataFrame(list(stats.items()), columns=['Metric', 'Value']))"
+            "\n"
+            "formatted_stats = pd.DataFrame({\n"
+            "    'Metric': [\n"
+            "        'Total Songs',\n"
+            "        'Unique Countries',\n"
+            "        'Unique Genres',\n"
+            "        'Total Views',\n"
+            "        'Total Likes',\n"
+            "        'Total Comments',\n"
+            "        'Avg Views',\n"
+            "        'Avg Likes',\n"
+            "        'Avg Engagement'\n"
+            "    ],\n"
+            "    'Value': [\n"
+            "        f\"{stats['total_songs']:,}\",\n"
+            "        f\"{stats['unique_countries']:,}\",\n"
+            "        f\"{stats['unique_genres']:,}\",\n"
+            "        format_number(stats['total_views']),\n"
+            "        format_number(stats['total_likes']),\n"
+            "        format_number(stats['total_comments']),\n"
+            "        format_number(stats['avg_views']),\n"
+            "        format_number(stats['avg_likes']),\n"
+            "        f\"{stats['avg_engagement']:.2f}%\"\n"
+            "    ]\n"
+            "})\n"
+            "\n"
+            "display(formatted_stats)"
         ),
     ]
