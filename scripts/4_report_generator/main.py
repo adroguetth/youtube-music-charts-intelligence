@@ -81,8 +81,8 @@ def _resolve_week_label(args: argparse.Namespace) -> str:
 # ============================================================================
 def _generate_ai_insights(df: pd.DataFrame, period_label: str, language: str, use_ai: bool) -> dict[str, str]:
     """
-    Generates the AI insights for each subsection.
-    Returns a dictionary mapping section_id -> markdown_text.
+    Generates the AI insights for the introduction, each subsection,
+    and the conclusion. Returns a dictionary mapping section_id -> markdown_text.
     """
     if not use_ai:
         return {}
@@ -101,29 +101,45 @@ def _generate_ai_insights(df: pd.DataFrame, period_label: str, language: str, us
 
     insights = {}
 
-    # Subsection IDs that will have AI analysis
+    # ========================================================================
+    # 1. GENERATE INTRODUCTION (before the loop)
+    # ========================================================================
+    logger.info(f"      [Intro] Generating introduction...")
+    intro_context = (
+        f"Period: {period_label}, "
+        f"Total Songs: {len(df)}, "
+        f"Countries: {df['artist_country'].nunique()}, "
+        f"Genres: {df['macro_genre'].nunique()}"
+    )
+    
+    # DeepSeek polish for introduction
+    intro_text, _ = writer.polish("introduction", intro_context, language)
+    if intro_text:
+        # The introduction prompt has placeholders like {period_label}, {total_songs}, etc.
+        # We need to format them here.
+        try:
+            intro_text = intro_text.format(
+                period_label=period_label,
+                total_songs=len(df),
+                total_countries=df['artist_country'].nunique(),
+                total_genres=df['macro_genre'].nunique(),
+            )
+        except KeyError:
+            # If the prompt doesn't have placeholders, use it as is
+            pass
+        insights["introduction"] = intro_text
+        logger.info(f"      ✅ introduction (via DeepSeek)")
+
+    # ========================================================================
+    # 2. GENERATE SUBSECTION INSIGHTS (the loop)
+    # ========================================================================
     ai_sections = [
-        "general_stats",
-        "continents",
-        "countries_by_songs",
-        "countries_by_likes",
-        "countries_top_songs",
-        "genre_stats",
-        "genre_treemap",
-        "genre_engagement",
-        "top_songs_by_views",
-        "top_songs_by_likes",
-        "top_songs_by_engagement",
-        "video_summary",
-        "video_views",
-        "video_engagement",
-        "video_duration",
-        "video_channels",
-        "temporal_views",
-        "temporal_engagement",
-        "temporal_releases",
-        "collab_views",
-        "collab_engagement",
+        "general_stats", "continents", "countries_by_songs", "countries_by_likes",
+        "countries_top_songs", "genre_stats", "genre_treemap", "genre_engagement",
+        "top_songs_by_views", "top_songs_by_likes", "top_songs_by_engagement",
+        "video_summary", "video_views", "video_engagement", "video_duration", "video_channels",
+        "temporal_views", "temporal_engagement", "temporal_releases",
+        "collab_views", "collab_engagement",
     ]
 
     for section in ai_sections:
@@ -150,7 +166,7 @@ def _generate_ai_insights(df: pd.DataFrame, period_label: str, language: str, us
         
         if not raw_summary:
             logger.warning(f"      [AI] Failed to summarize {section}. Skipping.")
-            # FIX: Record failure so the circuit breaker can activate
+            # Record failure so the circuit breaker can activate
             budget.record_usage(model_used, 0, success=False)
             continue
 
@@ -167,6 +183,26 @@ def _generate_ai_insights(df: pd.DataFrame, period_label: str, language: str, us
         
         insights[section] = final_text
         logger.info(f"      ✅ {section} (via {model_used})")
+
+    # ========================================================================
+    # 3. GENERATE CONCLUSION (after the loop)
+    # ========================================================================
+    logger.info(f"      [Conclusion] Generating conclusion...")
+    # Build a context with the key findings from all sections
+    conclusion_context_parts = []
+    for section_id, text in insights.items():
+        if section_id not in ["introduction", "conclusion"]:
+            # Take a short snippet of each insight to avoid exceeding token limits
+            snippet = text[:200].replace("\n", " ")
+            conclusion_context_parts.append(f"- {section_id}: {snippet}...")
+    
+    conclusion_context = "\n".join(conclusion_context_parts)
+    
+    # DeepSeek polish for conclusion
+    conclusion_text, _ = writer.polish("conclusion", conclusion_context, language)
+    if conclusion_text:
+        insights["conclusion"] = conclusion_text
+        logger.info(f"      ✅ conclusion (via DeepSeek)")
 
     return insights
 
