@@ -9,6 +9,7 @@ Responsibilities
 - Build the specific prompt for the final analysis.
 - Call the DeepSeek API.
 - Return the polished text.
+- Fallback: if all small models fail, analyze the raw table directly.
 
 Notes
 -----
@@ -18,6 +19,8 @@ Notes
   summary so the report is never left empty.
 - The `WRITER_PROMPTS` dictionary is keyed by `section_id`. It includes
   the 21 subsection prompts plus the `introduction` and `conclusion`.
+- The `polish_from_table` method is a fallback used when all small models
+  (Groq, Google, Meta) fail. It asks DeepSeek to analyze the raw table.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -599,3 +602,63 @@ class DeepSeekWriter:
             # Fallback: devolver el resumen crudo para no dejar el reporte sin análisis
             print("   [Writer] Falling back to the raw summary.")
             return summary, 0
+
+    def polish_from_table(self, section_id: str, table_md: str, language: str = "es") -> tuple[str, int]:
+        """
+        Fallback method: Ask DeepSeek to analyze the raw table directly.
+        Used when all small summarizer models fail.
+        """
+        if not table_md or not self.api_key:
+            return "", 0
+
+        # Build a generic prompt for table analysis
+        if language == "es":
+            prompt = (
+                "Eres un analista de datos musicales. "
+                "Analiza la siguiente tabla:\n\n"
+                f"{table_md}\n\n"
+                "Escribe un análisis ejecutivo de 4 a 6 líneas. "
+                "Menciona el dato más alto, el segundo y el tercero, "
+                "y destaca cualquier anomalía o tendencia notable. "
+                "Usa un tono directo y analítico. No inventes datos."
+            )
+        else:
+            prompt = (
+                "You are a music data analyst. "
+                "Analyze the following table:\n\n"
+                f"{table_md}\n\n"
+                "Write an executive analysis of 4 to 6 lines. "
+                "Mention the highest data point, the second and third, "
+                "and highlight any anomaly or notable trend. "
+                "Use a direct and analytical tone. Do not invent data."
+            )
+
+        try:
+            response = requests.post(
+                self.api_url,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "deepseek-chat",
+                    "messages": [
+                        {"role": "system", "content": "You are an expert music data analyst."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.4,
+                    "max_tokens": 300
+                },
+                timeout=30
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            final_text = data["choices"][0]["message"]["content"].strip()
+            tokens_used = data.get("usage", {}).get("total_tokens", 0)
+            
+            return final_text, tokens_used
+            
+        except Exception as e:
+            print(f"   [Writer] DeepSeek fallback failed: {e}")
+            return "", 0
