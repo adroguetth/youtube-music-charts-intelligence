@@ -102,36 +102,7 @@ def _generate_ai_insights(df: pd.DataFrame, period_label: str, language: str, us
     insights = {}
 
     # ========================================================================
-    # 1. GENERATE INTRODUCTION (before the loop)
-    # ========================================================================
-    logger.info(f"      [Intro] Generating introduction...")
-    intro_context = (
-        f"Period: {period_label}, "
-        f"Total Songs: {len(df)}, "
-        f"Countries: {df['artist_country'].nunique()}, "
-        f"Genres: {df['macro_genre'].nunique()}"
-    )
-    
-    # DeepSeek polish for introduction
-    intro_text, _ = writer.polish("introduction", intro_context, language)
-    if intro_text:
-        # The introduction prompt has placeholders like {period_label}, {total_songs}, etc.
-        # We need to format them here.
-        try:
-            intro_text = intro_text.format(
-                period_label=period_label,
-                total_songs=len(df),
-                total_countries=df['artist_country'].nunique(),
-                total_genres=df['macro_genre'].nunique(),
-            )
-        except KeyError:
-            # If the prompt doesn't have placeholders, use it as is
-            pass
-        insights["introduction"] = intro_text
-        logger.info(f"      ✅ introduction (via DeepSeek)")
-
-    # ========================================================================
-    # 2. GENERATE SUBSECTION INSIGHTS (the loop)
+    # 1. GENERATE SUBSECTION INSIGHTS (the loop)
     # ========================================================================
     ai_sections = [
         "general_stats", "continents", "countries_by_songs", "countries_by_likes",
@@ -185,24 +156,43 @@ def _generate_ai_insights(df: pd.DataFrame, period_label: str, language: str, us
         logger.info(f"      ✅ {section} (via {model_used})")
 
     # ========================================================================
-    # 3. GENERATE CONCLUSION (after the loop)
+    # 2. GENERATE CONCLUSION (with FULL text of all sections)
     # ========================================================================
     logger.info(f"      [Conclusion] Generating conclusion...")
-    # Build a context with the key findings from all sections
+    
+    # Build context with the FULL text of all sections, not just 200 chars
     conclusion_context_parts = []
     for section_id, text in insights.items():
         if section_id not in ["introduction", "conclusion"]:
-            # Take a short snippet of each insight to avoid exceeding token limits
-            snippet = text[:200].replace("\n", " ")
-            conclusion_context_parts.append(f"- {section_id}: {snippet}...")
+            conclusion_context_parts.append(f"### {section_id}\n{text}")
     
-    conclusion_context = "\n".join(conclusion_context_parts)
+    conclusion_context = "\n\n".join(conclusion_context_parts)
     
-    # DeepSeek polish for conclusion
     conclusion_text, _ = writer.polish("conclusion", conclusion_context, language)
     if conclusion_text:
         insights["conclusion"] = conclusion_text
         logger.info(f"      ✅ conclusion (via DeepSeek)")
+
+    # ========================================================================
+    # 3. GENERATE INTRODUCTION (with FULL text of all sections + conclusion)
+    # ========================================================================
+    logger.info(f"      [Intro] Generating introduction...")
+    
+    intro_context_parts = []
+    for section_id, text in insights.items():
+        if section_id not in ["introduction", "conclusion"]:
+            intro_context_parts.append(f"### {section_id}\n{text}")
+    
+    intro_context = "\n\n".join(intro_context_parts)
+    
+    # Add the conclusion to the context for the introduction
+    if insights.get("conclusion"):
+        intro_context += f"\n\n### conclusion\n{insights['conclusion']}"
+    
+    intro_text, _ = writer.polish("introduction", intro_context, language)
+    if intro_text:
+        insights["introduction"] = intro_text
+        logger.info(f"      ✅ introduction (via DeepSeek)")
 
     return insights
 
