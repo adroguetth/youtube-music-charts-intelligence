@@ -34,48 +34,66 @@ import requests
 # ============================================================================
 WRITER_PROMPTS = {
     # ========================================================================
-    # INTRODUCTION (injected at the beginning of the notebook)
+    # INTRODUCTION (receives the full text of all sections)
     # ========================================================================
     "introduction": {
         "es": (
             "Actúa como un editor de una revista de análisis musical. "
-            "Escribe una introducción de 6 a 8 líneas para un reporte semanal de YouTube Music Charts. "
-            "El objetivo es invitar al lector a sumergirse en los datos. "
-            "Menciona que el reporte cubre {period_label} y que analiza {total_songs} canciones de {total_countries} países y {total_genres} géneros. "
-            "Usa un tono periodístico, atractivo y directo. "
-            "PROHIBIDO: No uses frases como 'En este reporte...' o 'A continuación...'. Ve directo al tema."
+            "A continuación, te presento los análisis de todas las secciones del reporte:\n\n"
+            "{summary}\n\n"
+            "Tu tarea es escribir una introducción de 6 a 8 líneas que invite al lector a sumergirse en el reporte. "
+            "Debes mencionar EXPLÍCITAMENTE los hallazgos clave que aparecen en los análisis anteriores: el género dominante, el país líder y la tendencia temporal más notable. "
+            "Usa un tono analítico, directo y concreto. "
+            "PROHIBIDO: No uses frases genéricas como 'Los números no mienten', 'Detrás de cada reproducción hay una historia' o 'La interpretación está a la vista'. "
+            "Ve directo a los datos concretos."
         ),
         "en": (
             "Act as an editor of a music analysis magazine. "
-            "Write a 6 to 8-line introduction for a weekly YouTube Music Charts report. "
-            "The goal is to invite the reader to dive into the data. "
-            "Mention that the report covers {period_label} and analyzes {total_songs} songs from {total_countries} countries and {total_genres} genres. "
-            "Use a journalistic, engaging, and direct tone. "
-            "FORBIDDEN: Do not use phrases like 'In this report...' or 'Below...'. Get straight to the point."
+            "Below are the analyses of all sections of the report:\n\n"
+            "{summary}\n\n"
+            "Your task is to write a 6 to 8-line introduction that invites the reader to dive into the report. "
+            "You MUST explicitly mention the key findings from the analyses above: the dominant genre, the leading country, and the most notable temporal trend. "
+            "Use an analytical, direct, and concrete tone. "
+            "FORBIDDEN: Do not use generic phrases like 'The numbers don't lie', 'Behind every play there's a story', or 'The interpretation is on the table'. "
+            "Get straight to the concrete data."
         )
     },
 
     # ========================================================================
-    # CONCLUSION (injected at the end of the notebook)
+    # CONCLUSION (receives the full text of all sections)
     # ========================================================================
     "conclusion": {
         "es": (
             "Actúa como un analista senior de la industria musical. "
-            "Basado en todos los análisis de este reporte, escribe una conclusión de 8 a 10 líneas. "
-            "NO es un resumen. Es una síntesis de los hallazgos principales. "
-            "Identifica 3 o 4 descubrimientos clave (ej. el género dominante, el país líder, la tendencia temporal más notable, el impacto de las colaboraciones). "
-            "Conecta los hallazgos entre sí (ej. 'El dominio de Indian Pop se alinea con la concentración geográfica en Asia...'). "
-            "Termina con una implicación estratégica para la industria. "
-            "PROHIBIDO: No uses frases como 'En conclusión' o 'Para resumir'. Sé directo y analítico."
+            "A continuación, te presento los análisis de todas las secciones del reporte:\n\n"
+            "{summary}\n\n"
+            "Tu tarea es escribir una conclusión de 15 líneas. NO es un resumen. Es una síntesis de los hallazgos principales. "
+            "Debes mencionar EXPLÍCITAMENTE los siguientes datos concretos del reporte:\n"
+            "- El género dominante y su cantidad exacta de canciones.\n"
+            "- El país líder en cantidad de canciones y su cifra exacta.\n"
+            "- El país líder en likes y su cifra exacta.\n"
+            "- La brecha entre el primer y segundo país (en canciones y en likes).\n"
+            "- La tendencia temporal más notable (ej. el trimestre con más lanzamientos).\n"
+            "- El impacto de las colaboraciones (vistas vs engagement).\n"
+            "Conecta estos hallazgos entre sí y termina con una implicación estratégica concreta para la industria. "
+            "PROHIBIDO: No uses frases genéricas como 'hegemonía geográfica', 'diásporas masivas' o 'economías con poblaciones jóvenes'. "
+            "Usa los números exactos del reporte. Sé directo y analítico."
         ),
         "en": (
             "Act as a senior music industry analyst. "
-            "Based on all the analyses in this report, write an 8 to 10-line conclusion. "
-            "It is NOT a summary. It is a synthesis of the main findings. "
-            "Identify 3 or 4 key discoveries (e.g., the dominant genre, the leading country, the most notable temporal trend, the impact of collaborations). "
-            "Connect the findings to each other (e.g., 'The dominance of Indian Pop aligns with the geographic concentration in Asia...'). "
-            "End with a strategic implication for the industry. "
-            "FORBIDDEN: Do not use phrases like 'In conclusion' or 'To summarize'. Be direct and analytical."
+            "Below are the analyses of all sections of the report:\n\n"
+            "{summary}\n\n"
+            "Your task is to write a 15-line conclusion. It is NOT a summary. It is a synthesis of the main findings. "
+            "You MUST explicitly mention the following concrete data from the report:\n"
+            "- The dominant genre and its exact song count.\n"
+            "- The leading country in song count and its exact figure.\n"
+            "- The leading country in likes and its exact figure.\n"
+            "- The gap between the first and second country (in songs and likes).\n"
+            "- The most notable temporal trend (e.g., the quarter with the most releases).\n"
+            "- The impact of collaborations (views vs engagement).\n"
+            "Connect these findings to each other and end with a concrete strategic implication for the industry. "
+            "FORBIDDEN: Do not use generic phrases like 'geographic hegemony', 'massive diasporas', or 'young populations'. "
+            "Use the exact numbers from the report. Be direct and analytical."
         )
     },
 
@@ -548,13 +566,7 @@ class DeepSeekWriter:
             print(f"   [Writer] Warning: No prompt found for section '{section_id}' and language '{language}'. Using raw summary.")
             return summary, 0
 
-        # For introduction and conclusion, the summary is already formatted with the placeholders
-        # For other sections, the summary is the raw summary from the summarizer
-        try:
-            prompt = prompt_template.format(summary=summary)
-        except KeyError:
-            # If the prompt has other placeholders (like introduction), format them
-            prompt = prompt_template
+        prompt = prompt_template.format(summary=summary)
 
         try:
             response = requests.post(
