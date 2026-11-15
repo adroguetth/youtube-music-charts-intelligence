@@ -94,8 +94,13 @@ class TableSummarizer:
         # Proactive rate limiting (avoid bursts)
         current_time = time.time()
         time_since_last = current_time - self.last_groq_request_time
-        if time_since_last < 4:
-            time.sleep(4 - time_since_last)
+
+        # Wait 20 seconds between requests to stay under the 8K TPM limit.
+        # gpt-oss-120b generates reasoning tokens, so each request can consume
+        # ~1K-2K tokens. With 20s between requests, we make 3 requests per minute
+        # = ~6K tokens/min, which is safely below the 8K TPM limit.
+        if time_since_last < 20:
+            time.sleep(20 - time_since_last)
 
         prompt = PROMPTS.get(language, PROMPTS["es"]).format(table=table_markdown)
 
