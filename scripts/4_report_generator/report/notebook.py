@@ -9,6 +9,8 @@ Responsibilities
 - Emit the title cell and the setup cell.
 - Append the cells produced by each section builder, in the order
   declared in `report.sections.WEEKLY_SECTIONS`.
+- Inject the AI-generated introduction after the `intro` section.
+- Inject the AI-generated conclusion after the `exec_summary` section.
 - Write the notebook to disk with `nbformat`.
 
 Notes
@@ -26,6 +28,8 @@ Notes
   collaborations) consume the dict internally. For the remaining sections
   (general_stats, continents), the insight is injected at the end of the
   section by this module.
+- The `introduction` insight is injected right after the `intro` section.
+- The `conclusion` insight is injected right after the `exec_summary` section.
 - The v1.0 signature stays compatible:
   `generate_notebook(df, period, output_path, language, insights=None)`.
 - The setup cell is emitted once, before the first section, by
@@ -96,6 +100,9 @@ def generate_notebook(
         (see `_SECTIONS_WITH_INTERNAL_INSIGHTS`) consume it directly;
         the remaining sections receive their insight at the end of the
         section from this function.
+        Additionally, the `introduction` insight is injected after the
+        `intro` section, and the `conclusion` insight is injected after
+        the `exec_summary` section.
 
     Notes
     -----
@@ -105,8 +112,10 @@ def generate_notebook(
         [setup cell]
         for each section in WEEKLY_SECTIONS:
             [section cells from builder]
+            [introduction markdown cell]    # only after the `intro` section
             [optional insight markdown cell]  # only for sections without
                                               # internal injection
+            [conclusion markdown cell]      # only after the `exec_summary` section
     """
     nb = new_notebook()
     nb.metadata = _kernel_metadata()
@@ -118,11 +127,19 @@ def generate_notebook(
         builder = BUILDERS[section]
         nb.cells.extend(builder(df, period, language, insights))
 
+        # Inject introduction right after the "intro" section
+        if section == "intro" and insights and insights.get("introduction"):
+            nb.cells.append(new_markdown_cell(insights["introduction"]))
+
         # Only inject the insight at the end for sections whose builders
         # do NOT already handle it internally.
         if section not in _SECTIONS_WITH_INTERNAL_INSIGHTS:
             if insights and insights.get(section):
                 nb.cells.append(new_markdown_cell(insights[section]))
+
+        # Inject conclusion right after the "exec_summary" section
+        if section == "exec_summary" and insights and insights.get("conclusion"):
+            nb.cells.append(new_markdown_cell(insights["conclusion"]))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
