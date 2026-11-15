@@ -136,10 +136,23 @@ def _generate_ai_insights(df: pd.DataFrame, period_label: str, language: str, us
         raw_summary, model_used, tokens_summary = summarizer.summarize(table_md, model_name, language)
         
         if not raw_summary:
-            logger.warning(f"      [AI] Failed to summarize {section}. Skipping.")
-            # Record failure so the circuit breaker can activate
-            budget.record_usage(model_used, 0, success=False)
-            continue
+            logger.warning(f"      [AI] All small models failed for {section}. Trying DeepSeek as last resort...")
+            # Fallback: Pasar la tabla directamente a DeepSeek
+            final_text, tokens_writer = writer.polish_from_table(section, table_md, language)
+            if final_text:
+                budget.record_usage("deepseek_writer", tokens_writer, success=True)
+                cache.save(period_label, section, language, {
+                    "summary": table_md, # Guardamos la tabla original
+                    "final_text": final_text,
+                    "model_used": "deepseek_writer"
+                })
+                insights[section] = final_text
+                logger.info(f"      ✅ {section} (via deepseek_writer - fallback)")
+                continue
+            else:
+                logger.warning(f"      [AI] DeepSeek also failed for {section}. Skipping.")
+                budget.record_usage(model_used, 0, success=False)
+                continue
 
         # 4. Polish with DeepSeek (pass 'section' as the first argument)
         final_text, tokens_writer = writer.polish(section, raw_summary, language)
