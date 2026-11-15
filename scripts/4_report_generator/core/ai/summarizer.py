@@ -115,7 +115,7 @@ class TableSummarizer:
                     "model": "openai/gpt-oss-120b",
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.1,
-                    "max_tokens": 500,
+                    "max_tokens": 1000,
                 },
                 timeout=90,
             )
@@ -231,8 +231,8 @@ class TableSummarizer:
                 json={
                     "model": model_id,
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.1,
-                    "max_tokens": 500,
+                    "temperature": 1,
+                    "max_tokens": 1000,
                     "reasoning_effort": "low",
                 },
                 timeout=120,
