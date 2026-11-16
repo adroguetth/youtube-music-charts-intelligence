@@ -37,7 +37,7 @@ import time
 import requests
 
 # ============================================================================
-# PROMPT TEMPLATES (flexible to avoid refusals)
+# PROMPT TEMPLATES
 # ============================================================================
 PROMPTS = {
     "es": (
@@ -114,7 +114,7 @@ class TableSummarizer:
                 json={
                     "model": "openai/gpt-oss-120b",
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.1,
+                    "temperature": 0.5,
                     "max_tokens": 1000,
                 },
                 timeout=90,
@@ -152,7 +152,7 @@ class TableSummarizer:
             return "", 0
 
     # ========================================================================
-    # GOOGLE (Gemma)
+    # GOOGLE (Gemma 4 B)
     # ========================================================================
     def _summarize_with_google(self, table_markdown: str, language: str) -> tuple[str, int]:
         """Call Google API (Gemma 4) with one retry on error 500."""
@@ -162,7 +162,7 @@ class TableSummarizer:
 
         prompt = PROMPTS.get(language, PROMPTS["es"]).format(table=table_markdown)
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:generateContent?key={self.google_api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent?key={self.google_api_key}"
 
         # Try up to 2 times (1 initial + 1 retry)
         for attempt in range(1, 3):
@@ -243,7 +243,16 @@ class TableSummarizer:
                 return "", 0
 
             data = response.json()
-            summary = data["choices"][0]["message"]["content"].strip()
+            
+            # FIX: Safely handle NoneType for message content.
+            # Meta's API may return None if a safety filter is triggered.
+            message_content = data.get("choices", [{}])[0].get("message", {}).get("content")
+            
+            if not message_content:
+                print("   [Summarizer] Muse Spark returned empty content (NoneType).")
+                return "", 0
+
+            summary = message_content.strip()
             tokens_used = data.get("usage", {}).get("total_tokens", 0)
 
             # Validate response to catch model refusals
