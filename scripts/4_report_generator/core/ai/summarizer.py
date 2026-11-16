@@ -41,29 +41,78 @@ import requests
 # ============================================================================
 PROMPTS = {
     "es": (
-        "Eres un analista de datos. Tu única tarea es extraer los hechos clave de esta tabla:\n\n"
+        "Eres un analista de datos senior. Tu tarea es extraer los hechos clave de esta tabla "
+        "para que un redactor los convierta en un análisis ejecutivo.\n\n"
+        "TABLA:\n"
         "{table}\n\n"
-        "Escribe un resumen estructurado en viñetas (bullet points) con las siguientes reglas:\n"
-        "1. **Top 1:** Menciona el dato más alto de la tabla (con su cifra exacta).\n"
-        "2. **Top 2:** Menciona el segundo dato más alto (con su cifra exacta).\n"
-        "3. **Top 3:** Menciona el tercer dato más alto (con su cifra exacta).\n"
-        "4. **Contexto:** Menciona la cifra total o el promedio general si aplica.\n"
-        "5. **Observación:** Destaca cualquier dato que rompa la tendencia (ej. un valor atípico, un empate, una caída abrupta).\n"
-        "PROHIBIDO: No escribas conclusiones, recomendaciones, interpretaciones ni frases como 'esto sugiere que...' o 'esto indica que...'. "
-        "Solo describe los hechos con los números exactos de la tabla. No uses lenguaje poético."
+        "{section_hint}\n"
+        "INSTRUCCIONES:\n"
+        "1. Escribe un resumen en viñetas (bullet points), una por hecho. "
+        "NO uses etiquetas como 'Top 1:', 'Top 2:', 'Contexto:' o 'Observación:'. "
+        "Cada bullet empieza directamente con el dato o el nombre propio.\n"
+        "2. Usa las cifras EXACTAS tal como aparecen en la tabla (si dice '40.7M', "
+        "escribe '40.7M'; si dice '1,371.3', escribe '1,371.3'). No redondees.\n"
+        "3. Cubre, según lo que la tabla permita:\n"
+        "   - Los 3 valores más altos (si la tabla es un ranking).\n"
+        "   - La tendencia temporal (si la tabla tiene trimestres, meses o años): "
+        "¿sube, baja o se mantiene? ¿Dónde está el pico?\n"
+        "   - La brecha entre el primero y el segundo (si aplica).\n"
+        "   - La concentración: ¿el top 3 suma más del 50% del total? (si aplica).\n"
+        "   - La comparación entre grupos (si la tabla compara dos o más categorías, "
+        "ej. solo vs colaboración, official vs lyric).\n"
+        "   - Cualquier anomalía: un valor atípico, un empate, una caída abrupta, "
+        "una categoría con muy pocos datos.\n"
+        "   - El total o promedio global (si la tabla lo permite).\n"
+        "4. Si la tabla no permite algún punto (ej. no hay dimensión temporal), "
+        "omítelo. No inventes datos ni tendencias.\n\n"
+        "PROHIBIDO:\n"
+        "- Escribir conclusiones, recomendaciones o interpretaciones "
+        "('esto sugiere que...', 'esto indica que...', 'esto revela que...').\n"
+        "- Especular sobre causas ('porque la audiencia es joven', 'debido a...').\n"
+        "- Usar lenguaje poético o adjetivos valorativos ('impresionante', 'sorprendente').\n"
+        "- Redondear o parafrasear las cifras.\n"
+        "- Usar etiquetas de sección en los bullets.\n\n"
+        "PERMITIDO: describir patrones objetivos ('el valor sube de Q1 a Q3', "
+        "'la brecha entre el 1º y el 2º es de 0.1M', 'el top 3 concentra el 48% del total'). "
+        "Eso NO es interpretar, es describir.\n\n"
+        "FORMATO DE SALIDA: solo los bullets, sin introducción, sin cierre, sin título."
     ),
     "en": (
-        "You are a data analyst. Your only task is to extract key facts from this table:\n\n"
+        "You are a data analyst. Your task is to extract the key facts from this table "
+        "so a writer can turn them into an executive analysis.\n\n"
+        "TABLE:\n"
         "{table}\n\n"
-        "Write a structured bullet-point summary with the following rules:\n"
-        "1. **Top 1:** Mention the highest data point in the table (with its exact number).\n"
-        "2. **Top 2:** Mention the second highest data point (with its exact number).\n"
-        "3. **Top 3:** Mention the third highest data point (with its exact number).\n"
-        "4. **Context:** Mention the total figure or overall average if applicable.\n"
-        "5. **Observation:** Highlight any data point that breaks the trend (e.g., an outlier, a tie, an abrupt drop).\n"
-        "FORBIDDEN: Do not write conclusions, recommendations, interpretations, or phrases like 'this suggests that...' or 'this indicates that...'. "
-        "Only describe the facts with the exact numbers from the table. Do not use poetic language."
-    )
+        "{section_hint}\n"
+        "INSTRUCTIONS:\n"
+        "1. Write a bullet-point summary, one bullet per fact. "
+        "DO NOT use labels like 'Top 1:', 'Top 2:', 'Context:' or 'Observation:'. "
+        "Each bullet starts directly with the data point or proper name.\n"
+        "2. Use the EXACT figures as they appear in the table (if it says '40.7M', "
+        "write '40.7M'; if it says '1,371.3', write '1,371.3'). Do not round.\n"
+        "3. Cover, as the table allows:\n"
+        "   - The top 3 values (if the table is a ranking).\n"
+        "   - The temporal trend (if the table has quarters, months or years): "
+        "up, down, or flat? Where is the peak?\n"
+        "   - The gap between 1st and 2nd (if applicable).\n"
+        "   - Concentration: does the top 3 add up to more than 50% of the total? (if applicable).\n"
+        "   - Comparison between groups (if the table compares two or more categories, "
+        "e.g. solo vs collaboration, official vs lyric).\n"
+        "   - Any anomaly: an outlier, a tie, an abrupt drop, a category with very little data.\n"
+        "   - The total or overall average (if the table allows).\n"
+        "4. If the table does not allow a point (e.g. no temporal dimension), "
+        "omit it. Do not invent data or trends.\n\n"
+        "FORBIDDEN:\n"
+        "- Writing conclusions, recommendations or interpretations "
+        "('this suggests that...', 'this indicates that...', 'this reveals that...').\n"
+        "- Speculating about causes ('because the audience is young', 'due to...').\n"
+        "- Using poetic language or value adjectives ('impressive', 'surprising').\n"
+        "- Rounding or paraphrasing figures.\n"
+        "- Using section labels in bullets.\n\n"
+        "ALLOWED: describing objective patterns ('the value rises from Q1 to Q3', "
+        "'the gap between 1st and 2nd is 0.1M', 'the top 3 concentrate 48% of the total'). "
+        "That is NOT interpreting, it is describing.\n\n"
+        "OUTPUT FORMAT: only the bullets, no intro, no closing, no title."
+    ),
 }
 
 
@@ -115,7 +164,7 @@ class TableSummarizer:
                     "model": "openai/gpt-oss-120b",
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.5,
-                    "max_tokens": 1000,
+                    "max_tokens": 1500,
                 },
                 timeout=90,
             )
@@ -232,7 +281,7 @@ class TableSummarizer:
                     "model": model_id,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 1,
-                    "max_tokens": 1000,
+                    "max_tokens": 1500,
                     "reasoning_effort": "low",
                 },
                 timeout=120,
