@@ -21,6 +21,12 @@ Notes
   the 21 subsection prompts plus the `introduction` and `conclusion`.
 - The `polish_from_table` method is a fallback used when all small models
   (Groq, Google, Meta) fail. It asks DeepSeek to analyze the raw table.
+- Every prompt produces a SINGLE PARAGRAPH. No headers, no numbering,
+  no bullet points, no section labels. This is enforced both in the
+  prompt and in the reinforced system message (`_build_system_message`).
+- Prompts accept optional `{context}` (week label + total songs) and
+  always receive `{summary}`. When `period_label` is not provided, the
+  context block is omitted and the prompt still works.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence
@@ -33,7 +39,112 @@ import os
 import requests
 
 # ============================================================================
+# BANNED PHRASES (per language)
+# ============================================================================
+# These phrases are forbidden in ALL outputs. They are injected into the
+# system message and act as a global blacklist. Add to this list whenever
+# a new generic phrase shows up in the outputs.
+_BANNED_PHRASES = {
+    "es": [
+        "en conclusión",
+        "es importante destacar",
+        "cabe mencionar",
+        "los números no mienten",
+        "detrás de cada reproducción",
+        "la interpretación está a la vista",
+        "hegemonía geográfica",
+        "diásporas masivas",
+        "economías con poblaciones jóvenes",
+        "esto sugiere que",
+        "esto indica que",
+        "esto revela que",
+    ],
+    "en": [
+        "in conclusion",
+        "it is important to note",
+        "it is worth mentioning",
+        "the numbers don't lie",
+        "behind every play",
+        "the interpretation is on the table",
+        "geographic hegemony",
+        "massive diasporas",
+        "young populations",
+        "this suggests that",
+        "this indicates that",
+        "this reveals that",
+    ],
+}
+
+# ============================================================================
+# MAX TOKENS
+# ============================================================================
+# Intro and conclusion need more room than the individual sections.
+_MAX_TOKENS_OVERRIDE = {
+    "introduction": 1200,
+    "conclusion": 1500,
+}
+_DEFAULT_MAX_TOKENS = 1000
+
+
+# ============================================================================
+# HELPERS
+# ============================================================================
+def _build_system_message(language: str) -> str:
+    """
+    Build the reinforced system message that applies to every section.
+
+    It forbids headers, numbering, bullet points, section labels, Yes/No
+    answers and the phrases in `_BANNED_PHRASES`. This is the safety net
+    that keeps the output consistent even if an individual prompt slips.
+    """
+    banned = ", ".join(_BANNED_PHRASES.get(language, _BANNED_PHRASES["es"]))
+    if language == "en":
+        return (
+            "You are a music data analyst writing for an executive at a record label. "
+            "You ALWAYS write in flowing prose, in a single paragraph. "
+            "You NEVER use headers, numbering, bullet points, or section labels "
+            "(like 'Context:', 'Conclusion:', 'Insight:', 'The Winner:', 'The Gap:'). "
+            "You NEVER respond with 'Yes' or 'No' to a question: you write in affirmative. "
+            "You NEVER use these phrases: " + banned + ". "
+            "Your output is always a single analytical paragraph."
+        )
+    return (
+        "Eres un analista de datos musicales que escribe para un ejecutivo de un sello "
+        "discográfico. Escribes SIEMPRE en prosa fluida, en un solo párrafo. "
+        "NUNCA usas encabezados, numeración, viñetas ni etiquetas de sección "
+        "(como 'Contexto:', 'Conclusión:', 'Insight:', 'El Ganador:', 'La Brecha:'). "
+        "NUNCA respondes con 'Sí' o 'No' a una pregunta: redactas en afirmativo. "
+        "NUNCA usas estas frases: " + banned + ". "
+        "Tu salida es siempre un único párrafo de análisis ejecutivo."
+    )
+
+
+def _build_context(language: str, period_label: str, total_songs: int) -> str:
+    """
+    Build the context block that anchors the analysis in the period.
+
+    Returns an empty string if `period_label` is not provided, so the
+    prompts remain backward compatible with callers that don't pass it.
+    """
+    if not period_label:
+        return ""
+    if language == "en":
+        return f"Context: week {period_label}, {total_songs} songs in the global chart.\n\n"
+    return f"Contexto: semana {period_label}, {total_songs} canciones en el chart global.\n\n"
+
+
+# ============================================================================
 # PROMPT TEMPLATES
+# ============================================================================
+# Every prompt follows the same pattern:
+#   {context}{summary}\n\n
+#   "Write a SINGLE PARAGRAPH of X-Y words in flowing prose. "
+#   "NO headers, NO numbering, NO bullet points, "
+#   "NO section labels, NO 'Yes'/'No' answers. "
+#   "It is a flowing paragraph..."
+#   "Cover, without making it explicit: - point 1 - point 2 - point 3"
+#   "Use proper names when applicable. Do not speculate about causes..."
+#   "Start directly with [something specific]."
 # ============================================================================
 WRITER_PROMPTS = {
     # ========================================================================
@@ -41,25 +152,39 @@ WRITER_PROMPTS = {
     # ========================================================================
     "introduction": {
         "es": (
-            "Actúa como un editor de una revista de análisis musical. "
-            "A continuación, te presento los análisis de todas las secciones del reporte:\n\n"
+            "{context}"
+            "A continuación, los análisis de todas las secciones del reporte:\n\n"
             "{summary}\n\n"
-            "Tu tarea es escribir una introducción de 8 líneas que invite al lector a sumergirse en el reporte. "
-            "Debes mencionar EXPLÍCITAMENTE los hallazgos clave que aparecen en los análisis anteriores: el género dominante, el país líder y la tendencia temporal más notable. "
-            "Usa un tono analítico, directo y concreto. "
-            "PROHIBIDO: No uses frases genéricas como 'Los números no mienten', 'Detrás de cada reproducción hay una historia' o 'La interpretación está a la vista'. "
-            "Ve directo a los datos concretos."
+            "Escribe UN SOLO PÁRRAFO de 150-200 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas de sección, NO respondas con 'Sí'/'No'. "
+            "Es un párrafo corrido, como la apertura de un informe ejecutivo.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- El tamaño y alcance del catálogo (países, géneros, canciones).\n"
+            "- El género dominante y el país líder, con cifras exactas.\n"
+            "- La tendencia temporal más notable.\n"
+            "- Una frase final que invite a leer el resto del reporte.\n\n"
+            "Usa los nombres propios cuando aplique. "
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con el dato o con el nombre del género dominante."
         ),
         "en": (
-            "Act as an editor of a music analysis magazine. "
+            "{context}"
             "Below are the analyses of all sections of the report:\n\n"
             "{summary}\n\n"
-            "Your task is to write an 8-line introduction that invites the reader to delve into the report."
-            "You MUST explicitly mention the key findings from the analyses above: the dominant genre, the leading country, and the most notable temporal trend. "
-            "Use an analytical, direct, and concrete tone. "
-            "FORBIDDEN: Do not use generic phrases like 'The numbers don't lie', 'Behind every play there's a story', or 'The interpretation is on the table'. "
-            "Get straight to the concrete data."
-        )
+            "Write a SINGLE PARAGRAPH of 150-200 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO section labels, NO 'Yes'/'No' answers. "
+            "It is a flowing paragraph, like the opening of an executive report.\n\n"
+            "Cover, without making it explicit:\n"
+            "- The size and reach of the catalog (countries, genres, songs).\n"
+            "- The dominant genre and the leading country, with exact figures.\n"
+            "- The most notable temporal trend.\n"
+            "- A closing sentence that invites the reader to go through the report.\n\n"
+            "Use proper names when applicable. "
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the data point or with the name of the dominant genre."
+        ),
     },
 
     # ========================================================================
@@ -67,37 +192,49 @@ WRITER_PROMPTS = {
     # ========================================================================
     "conclusion": {
         "es": (
-            "Actúa como un analista senior de la industria musical. "
-            "A continuación, te presento los análisis de todas las secciones del reporte:\n\n"
+            "{context}"
+            "A continuación, los análisis de todas las secciones del reporte:\n\n"
             "{summary}\n\n"
-            "Tu tarea es escribir una conclusión de 15 líneas. NO es un resumen. Es una síntesis de los hallazgos principales. "
-            "Debes mencionar EXPLÍCITAMENTE los siguientes datos concretos del reporte:\n"
+            "Escribe UN SOLO PÁRRAFO de 250-300 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas de sección, NO respondas con 'Sí'/'No'. "
+            "NO repitas literalmente las frases de las secciones: sintetiza, "
+            "conecta los hallazgos entre sí y añade una interpretación que no "
+            "esté explícita en las secciones individuales.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
             "- El género dominante y su cantidad exacta de canciones.\n"
             "- El país líder en cantidad de canciones y su cifra exacta.\n"
             "- El país líder en likes y su cifra exacta.\n"
             "- La brecha entre el primer y segundo país (en canciones y en likes).\n"
             "- La tendencia temporal más notable (ej. el trimestre con más lanzamientos).\n"
             "- El impacto de las colaboraciones (vistas vs engagement).\n"
-            "Conecta estos hallazgos entre sí y termina con una implicación estratégica concreta para la industria. "
-            "PROHIBIDO: No uses frases genéricas como 'hegemonía geográfica', 'diásporas masivas' o 'economías con poblaciones jóvenes'. "
-            "Usa los números exactos del reporte. Sé directo y analítico."
+            "- Una implicación estratégica concreta para la industria al cierre.\n\n"
+            "Usa los números exactos del reporte. "
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con el hallazgo más contundente."
         ),
         "en": (
-            "Act as a senior music industry analyst. "
+            "{context}"
             "Below are the analyses of all sections of the report:\n\n"
             "{summary}\n\n"
-            "Your task is to write a 15-line conclusion. It is NOT a summary. It is a synthesis of the main findings. "
-            "You MUST explicitly mention the following concrete data from the report:\n"
+            "Write a SINGLE PARAGRAPH of 250-300 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO section labels, NO 'Yes'/'No' answers. "
+            "Do NOT literally repeat the phrases from the sections: synthesize, "
+            "connect the findings to each other and add an interpretation that "
+            "is not explicit in the individual sections.\n\n"
+            "Cover, without making it explicit:\n"
             "- The dominant genre and its exact song count.\n"
             "- The leading country in song count and its exact figure.\n"
             "- The leading country in likes and its exact figure.\n"
             "- The gap between the first and second country (in songs and likes).\n"
-            "- The most notable temporal trend (e.g., the quarter with the most releases).\n"
+            "- The most notable temporal trend (e.g. the quarter with the most releases).\n"
             "- The impact of collaborations (views vs engagement).\n"
-            "Connect these findings to each other and end with a concrete strategic implication for the industry. "
-            "FORBIDDEN: Do not use generic phrases like 'geographic hegemony', 'massive diasporas', or 'young populations'. "
-            "Use the exact numbers from the report. Be direct and analytical."
-        )
+            "- A concrete strategic implication for the industry at the close.\n\n"
+            "Use the exact numbers from the report. "
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the most striking finding."
+        ),
     },
 
     # ========================================================================
@@ -105,27 +242,35 @@ WRITER_PROMPTS = {
     # ========================================================================
     "general_stats": {
         "es": (
-            "Actúa como un Consultor Senior de Estrategia Musical. "
-            "Analiza el resumen estadístico de la semana:\n\n{summary}\n\n"
-            "Redacta un análisis ejecutivo de 4 a 6 líneas. "
-            "Sigue esta estructura:\n"
-            "1. **Contexto:** Describe el tamaño del catálogo usando el número total de canciones.\n"
-            "2. **Benchmark:** Compara la tasa de engagement con el estándar de la industria (3%-8%). ¿Estamos ante una audiencia hiper-fiel o pasiva?\n"
-            "3. **Diversidad:** Menciona la cantidad de países y géneros. ¿Es un fenómeno local o global?\n"
-            "4. **Conclusión:** Cierra con una frase de impacto estratégico. "
-            "PROHIBIDO: No uses 'En conclusión', 'Es importante destacar' ni lenguaje poético. Ve al dato."
+            "{context}{summary}\n\n"
+            "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas como 'Contexto:' o 'Benchmark:', "
+            "NO respondas con 'Sí'/'No'. Es un párrafo corrido, "
+            "como el análisis de un informe ejecutivo.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- El tamaño del catálogo (canciones, países, géneros).\n"
+            "- El engagement frente al estándar de la industria (3%-8%): "
+            "indica si la audiencia es hiper-fiel o pasiva, apoyándote en el dato.\n"
+            "- Una frase final de impacto estratégico que conecte los datos con una decisión.\n\n"
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con el dato principal (el total de canciones o el engagement)."
         ),
         "en": (
-            "Act as a Senior Music Strategy Consultant. "
-            "Analyze this week's statistical summary:\n\n{summary}\n\n"
-            "Write an executive analysis of 4 to 6 lines. "
-            "Follow this structure:\n"
-            "1. **Context:** Describe the catalog size using the total number of songs.\n"
-            "2. **Benchmark:** Compare the engagement rate with the industry standard (3%-8%). Are we facing a hyper-loyal or passive audience?\n"
-            "3. **Diversity:** Mention the number of countries and genres. Is this a local or global phenomenon?\n"
-            "4. **Conclusion:** End with a sentence of strategic impact. "
-            "FORBIDDEN: Do not use 'In conclusion', 'It is important to note', or poetic language. Stick to the data."
-        )
+            "{context}{summary}\n\n"
+            "Write a SINGLE PARAGRAPH of 90-130 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO labels like 'Context:' or 'Benchmark:', "
+            "NO 'Yes'/'No' answers. It is a flowing paragraph, "
+            "like the analysis of an executive report.\n\n"
+            "Cover, without making it explicit:\n"
+            "- The size of the catalog (songs, countries, genres).\n"
+            "- The engagement versus the industry standard (3%-8%): "
+            "state whether the audience is hyper-loyal or passive, backed by the data.\n"
+            "- A closing sentence of strategic impact that links data to a decision.\n\n"
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the main data point (total songs or engagement)."
+        ),
     },
 
     # ========================================================================
@@ -133,21 +278,31 @@ WRITER_PROMPTS = {
     # ========================================================================
     "continents": {
         "es": (
-            "Analiza la distribución geográfica por continente:\n\n{summary}\n\n"
-            "Redacta 4 a 6 líneas con tono analítico. "
-            "1. **Dominancia:** ¿Qué continente lidera y por qué crees que lo hace?\n"
-            "2. **Brecha:** Compara el líder con el segundo lugar. ¿Es un monopolio o hay competencia?\n"
-            "3. **Riesgo:** Si un continente concentra la mayoría, indica el riesgo de dependencia de ese mercado.\n"
-            "Sé directo. Nada de introducciones."
+            "{context}{summary}\n\n"
+            "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas como 'Dominancia:' o 'Riesgo:', "
+            "NO respondas con 'Sí'/'No'. Es un párrafo corrido.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- El continente que lidera y su cifra exacta.\n"
+            "- La brecha entre el primero y el segundo.\n"
+            "- Si un continente concentra la mayoría, el riesgo de dependencia de ese mercado.\n\n"
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con el nombre del continente líder o con su cifra."
         ),
         "en": (
-            "Analyze the geographic distribution by continent:\n\n{summary}\n\n"
-            "Write 4 to 6 lines with an analytical tone. "
-            "1. **Dominance:** Which continent leads and why do you think it does?\n"
-            "2. **Gap:** Compare the leader with the second place. Is it a monopoly or is there competition?\n"
-            "3. **Risk:** If one continent concentrates the majority, state the risk of dependency on that market.\n"
-            "Be direct. No introductions."
-        )
+            "{context}{summary}\n\n"
+            "Write a SINGLE PARAGRAPH of 90-130 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO labels like 'Dominance:' or 'Risk:', "
+            "NO 'Yes'/'No' answers. It is a flowing paragraph.\n\n"
+            "Cover, without making it explicit:\n"
+            "- The leading continent and its exact figure.\n"
+            "- The gap between first and second place.\n"
+            "- If one continent concentrates the majority, the risk of dependency on that market.\n\n"
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the name of the leading continent or with its figure."
+        ),
     },
 
     # ========================================================================
@@ -155,59 +310,101 @@ WRITER_PROMPTS = {
     # ========================================================================
     "countries_by_songs": {
         "es": (
-            "Analiza el Top de países por cantidad de canciones:\n\n{summary}\n\n"
-            "Redacta 4 a 6 líneas. "
-            "1. **El Top 3:** Menciona los países líderes con sus cifras exactas.\n"
-            "2. **La Brecha:** ¿El primer lugar domina por mucho o hay una competencia reñida?\n"
-            "3. **Long Tail:** Observa si el resto de países tienen muy pocas canciones. ¿Es un mercado concentrado o diverso?\n"
-            "Termina con una implicación para la expansión internacional."
+            "{context}{summary}\n\n"
+            "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas como 'El Top 3:', 'La Brecha:' o 'Long Tail:', "
+            "NO respondas con 'Sí'/'No'. Es un párrafo corrido.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- Los países líderes con sus cifras exactas.\n"
+            "- Si el primer lugar domina con holgura o si hay competencia reñida.\n"
+            "- Si el mercado está concentrado o si hay una larga cola de países con muy pocas canciones.\n"
+            "- Una implicación para la expansión internacional al cierre.\n\n"
+            "Usa los nombres propios de los países. "
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con el nombre del país líder o con su cifra."
         ),
         "en": (
-            "Analyze the Top countries by song count:\n\n{summary}\n\n"
-            "Write 4 to 6 lines. "
-            "1. **The Top 3:** Mention the leading countries with their exact figures.\n"
-            "2. **The Gap:** Does the first place dominate by a landslide or is there tight competition?\n"
-            "3. **Long Tail:** Observe if the rest of the countries have very few songs. Is it a concentrated or diverse market?\n"
-            "End with an implication for international expansion."
-        )
+            "{context}{summary}\n\n"
+            "Write a SINGLE PARAGRAPH of 90-130 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO labels like 'The Top 3:', 'The Gap:' or 'Long Tail:', "
+            "NO 'Yes'/'No' answers. It is a flowing paragraph.\n\n"
+            "Cover, without making it explicit:\n"
+            "- The leading countries with their exact figures.\n"
+            "- Whether the first place dominates by a landslide or there is tight competition.\n"
+            "- Whether the market is concentrated or if there is a long tail of countries with very few songs.\n"
+            "- An implication for international expansion at the close.\n\n"
+            "Use country names. "
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the name of the leading country or with its figure."
+        ),
     },
 
     "countries_by_likes": {
         "es": (
-            "Analiza el Top de países por total de likes:\n\n{summary}\n\n"
-            "Redacta 4 a 6 líneas. "
-            "1. **El Top 3:** Menciona los países con más likes y sus cifras exactas.\n"
-            "2. **Brecha:** Compara el 1º con el 2º. ¿Es una diferencia abismal o un empate técnico?\n"
-            "3. **Insight:** ¿Coincide el ranking de likes con el de canciones? Si no, ¿qué revela esto sobre la fidelidad de la audiencia?\n"
-            "Sé directo y analítico."
+            "{context}{summary}\n\n"
+            "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas como 'El Top 3:', 'Brecha:' o 'Insight:', "
+            "NO respondas con 'Sí'/'No'. Es un párrafo corrido.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- Los países líderes con sus cifras exactas de likes.\n"
+            "- La brecha entre el primero y el segundo.\n"
+            "- Si el orden coincide con el ranking por canciones; si no coincide, "
+            "qué revela sobre la fidelidad de la audiencia.\n\n"
+            "Usa los nombres propios de los países. "
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con el nombre del país líder o con su cifra de likes."
         ),
         "en": (
-            "Analyze the Top countries by total likes:\n\n{summary}\n\n"
-            "Write 4 to 6 lines. "
-            "1. **The Top 3:** Mention the countries with the most likes and their exact figures.\n"
-            "2. **Gap:** Compare 1st with 2nd. Is it a huge difference or a technical tie?\n"
-            "3. **Insight:** Does the likes ranking match the song count ranking? If not, what does this reveal about audience loyalty?\n"
-            "Be direct and analytical."
-        )
+            "{context}{summary}\n\n"
+            "Write a SINGLE PARAGRAPH of 90-130 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO labels like 'The Top 3:', 'Gap:' or 'Insight:', "
+            "NO 'Yes'/'No' answers. It is a flowing paragraph.\n\n"
+            "Cover, without making it explicit:\n"
+            "- The leading countries with their exact likes figures.\n"
+            "- The gap between first and second place.\n"
+            "- Whether the order matches the song-count ranking; if it does not, "
+            "what that reveals about audience loyalty.\n\n"
+            "Use country names. "
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the name of the leading country or with its likes figure."
+        ),
     },
 
     "countries_top_songs": {
         "es": (
-            "Analiza las canciones más exitosas por país:\n\n{summary}\n\n"
-            "Redacta 4 a 6 líneas. "
-            "1. **Protagonistas:** Menciona la canción más vista en cada uno de los países del Top 5.\n"
-            "2. **Patrón:** ¿Hay algún artista o género que se repita en varios países? ¿O cada país tiene su propio hit local?\n"
-            "3. **Conclusión:** ¿El éxito es global (un hit que funciona en todos lados) o local (cada país tiene su favorito)?\n"
-            "Sé directo con los nombres propios."
+            "{context}{summary}\n\n"
+            "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas como 'Protagonistas:', 'Patrón:' o 'Conclusión:', "
+            "NO respondas con 'Sí'/'No'. Es un párrafo corrido.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- La canción más vista en cada uno de los países del Top 5, con sus nombres propios.\n"
+            "- Si hay un artista o género que se repite entre países, o si cada país "
+            "tiene su propio hit local.\n"
+            "- Si el éxito es global (un hit que funciona en todos lados) o local.\n\n"
+            "Usa los nombres propios de canciones, artistas y países. "
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con el nombre de la primera canción o del primer país."
         ),
         "en": (
-            "Analyze the top songs by country:\n\n{summary}\n\n"
-            "Write 4 to 6 lines. "
-            "1. **Protagonists:** Mention the most-viewed song in each of the Top 5 countries.\n"
-            "2. **Pattern:** Is there an artist or genre that repeats across countries? Or does each country have its own local hit?\n"
-            "3. **Conclusion:** Is the success global (one hit that works everywhere) or local (each country has its favorite)?\n"
-            "Be direct with proper names."
-        )
+            "{context}{summary}\n\n"
+            "Write a SINGLE PARAGRAPH of 90-130 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO labels like 'Protagonists:', 'Pattern:' or 'Conclusion:', "
+            "NO 'Yes'/'No' answers. It is a flowing paragraph.\n\n"
+            "Cover, without making it explicit:\n"
+            "- The most-viewed song in each of the Top 5 countries, with proper names.\n"
+            "- Whether an artist or genre repeats across countries, or if each country "
+            "has its own local hit.\n"
+            "- Whether the success is global (one hit that works everywhere) or local.\n\n"
+            "Use the names of songs, artists and countries. "
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the name of the first song or of the first country."
+        ),
     },
 
     # ========================================================================
@@ -215,59 +412,99 @@ WRITER_PROMPTS = {
     # ========================================================================
     "genre_stats": {
         "es": (
-            "Analiza la tabla de estadísticas por género:\n\n{summary}\n\n"
-            "Redacta 4 a 6 líneas. "
-            "1. **El Género Dominante:** Menciona el género con más canciones y su cifra exacta.\n"
-            "2. **Diversidad:** ¿El catálogo está concentrado en pocos géneros o hay una distribución equilibrada?\n"
-            "3. **Oportunidad:** ¿Hay algún género con pocas canciones pero que merezca la pena explorar?\n"
-            "Ve al dato."
+            "{context}{summary}\n\n"
+            "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas como 'El Género Dominante:' o 'Diversidad:', "
+            "NO respondas con 'Sí'/'No'. Es un párrafo corrido.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- El género con más canciones y su cifra exacta.\n"
+            "- Si el catálogo está concentrado en pocos géneros o hay una distribución equilibrada.\n"
+            "- Si hay algún género con pocas canciones que merezca la pena explorar.\n\n"
+            "Usa los nombres propios de los géneros. "
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con el nombre del género dominante o con su cifra."
         ),
         "en": (
-            "Analyze the genre statistics table:\n\n{summary}\n\n"
-            "Write 4 to 6 lines. "
-            "1. **The Dominant Genre:** Mention the genre with the most songs and its exact figure.\n"
-            "2. **Diversity:** Is the catalog concentrated in few genres or is there a balanced distribution?\n"
-            "3. **Opportunity:** Is there any genre with few songs but worth exploring?\n"
-            "Stick to the data."
-        )
+            "{context}{summary}\n\n"
+            "Write a SINGLE PARAGRAPH of 90-130 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO labels like 'The Dominant Genre:' or 'Diversity:', "
+            "NO 'Yes'/'No' answers. It is a flowing paragraph.\n\n"
+            "Cover, without making it explicit:\n"
+            "- The genre with the most songs and its exact figure.\n"
+            "- Whether the catalog is concentrated in few genres or has a balanced distribution.\n"
+            "- Whether any genre with few songs is worth exploring.\n\n"
+            "Use genre names. "
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the name of the dominant genre or with its figure."
+        ),
     },
 
     "genre_treemap": {
         "es": (
-            "Analiza el treemap de distribución de géneros:\n\n{summary}\n\n"
-            "Redacta 4 a 6 líneas. "
-            "1. **El Bloque Más Grande:** Menciona el género que ocupa más espacio en el treemap.\n"
-            "2. **Concentración:** ¿Los 3 primeros géneros suman más del 50% del catálogo? ¿O hay una larga cola de géneros minoritarios?\n"
-            "3. **Implicación:** ¿Qué dice esto sobre la estrategia de contenido? ¿Es un catálogo de nicho o masivo?\n"
-            "Sé analítico."
+            "{context}{summary}\n\n"
+            "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas como 'El Bloque Más Grande:' o 'Concentración:', "
+            "NO respondas con 'Sí'/'No'. Es un párrafo corrido.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- El género que ocupa el mayor bloque en el treemap.\n"
+            "- Si los tres primeros géneros suman más del 50% del catálogo, "
+            "o si hay una larga cola de géneros minoritarios.\n"
+            "- Qué dice esto sobre la estrategia de contenido (nicho vs masivo).\n\n"
+            "Usa los nombres propios de los géneros. "
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con el nombre del género que ocupa el mayor bloque."
         ),
         "en": (
-            "Analyze the genre distribution treemap:\n\n{summary}\n\n"
-            "Write 4 to 6 lines. "
-            "1. **The Biggest Block:** Mention the genre that occupies the most space in the treemap.\n"
-            "2. **Concentration:** Do the top 3 genres add up to more than 50% of the catalog? Or is there a long tail of minority genres?\n"
-            "3. **Implication:** What does this say about the content strategy? Is it a niche or mass catalog?\n"
-            "Be analytical."
-        )
+            "{context}{summary}\n\n"
+            "Write a SINGLE PARAGRAPH of 90-130 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO labels like 'The Biggest Block:' or 'Concentration:', "
+            "NO 'Yes'/'No' answers. It is a flowing paragraph.\n\n"
+            "Cover, without making it explicit:\n"
+            "- The genre that occupies the largest block in the treemap.\n"
+            "- Whether the top 3 genres add up to more than 50% of the catalog, "
+            "or if there is a long tail of minority genres.\n"
+            "- What this says about the content strategy (niche vs mass).\n\n"
+            "Use genre names. "
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the name of the genre that occupies the largest block."
+        ),
     },
 
     "genre_engagement": {
         "es": (
-            "Analiza la tasa de engagement por género:\n\n{summary}\n\n"
-            "Redacta 4 a 6 líneas. "
-            "1. **El Rey del Engagement:** Menciona el género con la tasa más alta y su porcentaje exacto.\n"
-            "2. **Comparación:** ¿Coincide con el género más popular (por volumen)? Si no es así, explica qué revela esto (ej. música de fondo vs. nichos apasionados).\n"
-            "3. **Estrategia:** ¿Qué género ofrece la mejor oportunidad de conexión profunda?\n"
-            "Sin relleno."
+            "{context}{summary}\n\n"
+            "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas como 'El Rey del Engagement:' o 'Estrategia:', "
+            "NO respondas con 'Sí'/'No'. Es un párrafo corrido.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- El género con la tasa de engagement más alta y su porcentaje exacto.\n"
+            "- Si coincide o no con el género más popular por volumen, "
+            "y qué revela ese contraste.\n"
+            "- Qué género ofrece la mejor oportunidad de conexión profunda.\n\n"
+            "Usa los nombres propios de los géneros. "
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con el nombre del género con mayor engagement o con su porcentaje."
         ),
         "en": (
-            "Analyze the engagement rate by genre:\n\n{summary}\n\n"
-            "Write 4 to 6 lines. "
-            "1. **The Engagement King:** Mention the genre with the highest rate and its exact percentage.\n"
-            "2. **Comparison:** Does it match the most popular genre (by volume)? If not, explain what this reveals (e.g., background music vs. passionate niches).\n"
-            "3. **Strategy:** Which genre offers the best opportunity for deep connection?\n"
-            "No fluff."
-        )
+            "{context}{summary}\n\n"
+            "Write a SINGLE PARAGRAPH of 90-130 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO labels like 'The Engagement King:' or 'Strategy:', "
+            "NO 'Yes'/'No' answers. It is a flowing paragraph.\n\n"
+            "Cover, without making it explicit:\n"
+            "- The genre with the highest engagement rate and its exact percentage.\n"
+            "- Whether it matches or not the most popular genre by volume, "
+            "and what that contrast reveals.\n"
+            "- Which genre offers the best opportunity for deep connection.\n\n"
+            "Use genre names. "
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the name of the highest-engagement genre or with its percentage."
+        ),
     },
 
     # ========================================================================
@@ -275,59 +512,105 @@ WRITER_PROMPTS = {
     # ========================================================================
     "top_songs_by_views": {
         "es": (
-            "Analiza el ranking de canciones por vistas:\n\n{summary}\n\n"
-            "Redacta 4 a 6 líneas. "
-            "1. **Los Protagonistas:** Nombra las canciones o artistas que dominan en vistas.\n"
-            "2. **La Anomalía:** Busca un 'hit de nicho'. ¿Hay alguna canción con muchas menos vistas pero un engagement altísimo? Destácala.\n"
-            "3. **Conclusión:** ¿El éxito de esta semana es por masividad o por fidelidad?\n"
-            "Sé directo con los nombres propios."
+            "{context}{summary}\n\n"
+            "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas como 'Los Protagonistas:', 'La Anomalía:' o 'Conclusión:', "
+            "NO respondas con 'Sí'/'No'. Es un párrafo corrido.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- Las canciones o artistas que lideran en vistas, con sus cifras exactas.\n"
+            "- Si hay una canción con muchas menos vistas pero engagement atípicamente alto "
+            "(o viceversa), destácala como anomalía.\n"
+            "- Una frase final que responda si el éxito de la semana es por masividad o por fidelidad.\n\n"
+            "Usa los nombres propios de las canciones y artistas. "
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con el nombre de la canción líder o con su cifra."
         ),
         "en": (
-            "Analyze the song ranking by views:\n\n{summary}\n\n"
-            "Write 4 to 6 lines. "
-            "1. **The Protagonists:** Name the songs or artists dominating views.\n"
-            "2. **The Anomaly:** Look for a 'niche hit'. Is there a song with far fewer views but extremely high engagement? Highlight it.\n"
-            "3. **Conclusion:** Is this week's success driven by mass appeal or loyalty?\n"
-            "Be direct with proper names."
-        )
+            "{context}{summary}\n\n"
+            "Write a SINGLE PARAGRAPH of 90-130 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO labels like 'The Protagonists:', 'The Anomaly:' or 'Conclusion:', "
+            "NO 'Yes'/'No' answers. It is a flowing paragraph.\n\n"
+            "Cover, without making it explicit:\n"
+            "- The songs or artists dominating views, with their exact figures.\n"
+            "- Whether any song has far fewer views but an atypically high engagement "
+            "(or vice versa); highlight it as an anomaly.\n"
+            "- A closing sentence that answers whether this week's success is mass appeal or loyalty.\n\n"
+            "Use the names of songs and artists. "
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the name of the leading song or with its figure."
+        ),
     },
 
     "top_songs_by_likes": {
         "es": (
-            "Analiza el ranking de canciones por likes:\n\n{summary}\n\n"
-            "Redacta 4 a 6 líneas. "
-            "1. **Los Protagonistas:** Nombra las canciones o artistas que dominan en likes.\n"
-            "2. **Comparación:** ¿Coincide el Top de likes con el Top de vistas? Si no es así, ¿qué revela esto sobre la fidelidad de la audiencia?\n"
-            "3. **Insight:** ¿Hay alguna canción que tenga muchos likes pero pocas vistas? Eso indicaría un hit de nicho muy querido.\n"
-            "Sé directo con los nombres propios."
+            "{context}{summary}\n\n"
+            "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas como 'Los Protagonistas:', 'Comparación:' o 'Insight:', "
+            "NO respondas con 'Sí'/'No'. Es un párrafo corrido.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- Las canciones o artistas que lideran en likes, con sus cifras exactas.\n"
+            "- Si el Top de likes coincide o no con el Top de vistas; si no coincide, "
+            "qué revela sobre la fidelidad de la audiencia.\n"
+            "- Si hay una canción con muchos likes pero pocas vistas (o engagement "
+            "atípicamente alto), destácala como hit de nicho.\n\n"
+            "Usa los nombres propios de las canciones y artistas. "
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con el nombre de la canción líder o con su cifra de likes."
         ),
         "en": (
-            "Analyze the song ranking by likes:\n\n{summary}\n\n"
-            "Write 4 to 6 lines. "
-            "1. **The Protagonists:** Name the songs or artists dominating likes.\n"
-            "2. **Comparison:** Does the likes Top match the views Top? If not, what does this reveal about audience loyalty?\n"
-            "3. **Insight:** Is there a song with many likes but few views? That would indicate a highly beloved niche hit.\n"
-            "Be direct with proper names."
-        )
+            "{context}{summary}\n\n"
+            "Write a SINGLE PARAGRAPH of 90-130 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO labels like 'The Protagonists:', 'Comparison:' or 'Insight:', "
+            "NO 'Yes'/'No' answers. It is a flowing paragraph.\n\n"
+            "Cover, without making it explicit:\n"
+            "- The songs or artists dominating likes, with their exact figures.\n"
+            "- Whether the likes Top matches or not the views Top; if it does not, "
+            "what that reveals about audience loyalty.\n"
+            "- Whether any song has many likes but few views (or atypically high "
+            "engagement); highlight it as a niche hit.\n\n"
+            "Use the names of songs and artists. "
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the name of the leading song or with its likes figure."
+        ),
     },
 
     "top_songs_by_engagement": {
         "es": (
-            "Analiza el ranking de canciones por engagement:\n\n{summary}\n\n"
-            "Redacta 4 a 6 líneas. "
-            "1. **El Hit de Nicho:** Menciona la canción con la tasa de engagement más alta y su porcentaje.\n"
-            "2. **La Paradoja:** ¿Esta canción también está en el Top de vistas? Si no es así, explica qué revela esto (ej. una canción muy querida por un nicho pero poco masiva).\n"
-            "3. **Conclusión:** ¿El éxito de esta semana se mide por masividad o por conexión profunda?\n"
-            "Sé directo con los nombres propios."
+            "{context}{summary}\n\n"
+            "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas como 'El Hit de Nicho:', 'La Paradoja:' o 'Conclusión:', "
+            "NO respondas con 'Sí'/'No'. Es un párrafo corrido.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- La canción con la tasa de engagement más alta y su porcentaje exacto.\n"
+            "- Si esa canción también aparece (o no) en el Top de vistas, y qué revela "
+            "ese contraste sobre el tipo de audiencia (masiva vs de nicho).\n"
+            "- Una frase final que responda si el éxito de la semana se mide por masividad "
+            "o por conexión profunda.\n\n"
+            "Usa los nombres propios de las canciones y artistas. "
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con el nombre de la canción líder o con su porcentaje."
         ),
         "en": (
-            "Analyze the song ranking by engagement:\n\n{summary}\n\n"
-            "Write 4 to 6 lines. "
-            "1. **The Niche Hit:** Mention the song with the highest engagement rate and its percentage.\n"
-            "2. **The Paradox:** Is this song also in the views Top? If not, explain what this reveals (e.g., a song loved by a niche but not massive).\n"
-            "3. **Conclusion:** Is this week's success measured by mass appeal or deep connection?\n"
-            "Be direct with proper names."
-        )
+            "{context}{summary}\n\n"
+            "Write a SINGLE PARAGRAPH of 90-130 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO labels like 'The Niche Hit:', 'The Paradox:' or 'Conclusion:', "
+            "NO 'Yes'/'No' answers. It is a flowing paragraph.\n\n"
+            "Cover, without making it explicit:\n"
+            "- The song with the highest engagement rate and its exact percentage.\n"
+            "- Whether that song also appears (or not) in the views Top, and what that "
+            "contrast reveals about the type of audience (mass vs niche).\n"
+            "- A closing sentence that answers whether this week's success is measured by "
+            "mass appeal or by deep connection.\n\n"
+            "Use the names of songs and artists. "
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the name of the leading song or with its percentage."
+        ),
     },
 
     # ========================================================================
@@ -335,97 +618,161 @@ WRITER_PROMPTS = {
     # ========================================================================
     "video_summary": {
         "es": (
-            "Analiza el resumen de video (categorías y porcentajes):\n\n{summary}\n\n"
-            "Redacta 4 a 6 líneas. "
-            "1. **El Formato Dominante:** Menciona qué categoría (Official, Lyric, Live, Collaborations) tiene el mayor porcentaje.\n"
-            "2. **El Formato Minoritario:** ¿Cuál es el que menos presencia tiene? ¿Es una oportunidad de mercado?\n"
-            "3. **Conclusión:** ¿El catálogo está equilibrado o hay una dependencia clara de un formato?\n"
-            "Sé directo."
+            "{context}{summary}\n\n"
+            "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas como 'El Formato Dominante:' o 'El Formato Minoritario:', "
+            "NO respondas con 'Sí'/'No'. Es un párrafo corrido.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- La categoría (Official, Lyric, Live, Collaborations) con el mayor porcentaje.\n"
+            "- La categoría con menos presencia y si es una oportunidad de mercado.\n"
+            "- Si el catálogo está equilibrado o si hay una dependencia clara de un formato.\n\n"
+            "Usa los nombres de las categorías. "
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con la categoría dominante o con su porcentaje."
         ),
         "en": (
-            "Analyze the video summary (categories and percentages):\n\n{summary}\n\n"
-            "Write 4 to 6 lines. "
-            "1. **The Dominant Format:** Mention which category (Official, Lyric, Live, Collaborations) has the highest percentage.\n"
-            "2. **The Minority Format:** Which one has the least presence? Is it a market opportunity?\n"
-            "3. **Conclusion:** Is the catalog balanced or is there a clear dependency on one format?\n"
-            "Be direct."
-        )
+            "{context}{summary}\n\n"
+            "Write a SINGLE PARAGRAPH of 90-130 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO labels like 'The Dominant Format:' or 'The Minority Format:', "
+            "NO 'Yes'/'No' answers. It is a flowing paragraph.\n\n"
+            "Cover, without making it explicit:\n"
+            "- The category (Official, Lyric, Live, Collaborations) with the highest percentage.\n"
+            "- The category with the least presence and whether it is a market opportunity.\n"
+            "- Whether the catalog is balanced or if there is a clear dependency on one format.\n\n"
+            "Use the category names. "
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the dominant category or with its percentage."
+        ),
     },
 
     "video_views": {
         "es": (
-            "Analiza las vistas por tipo de video:\n\n{summary}\n\n"
-            "Redacta 4 a 6 líneas. "
-            "1. **El Formato Ganador:** Menciona qué tipo (Official, Lyric, Live) lidera en vistas promedio.\n"
-            "2. **La Brecha:** Compara el 1º con el 2º. ¿Es una diferencia abismal o un empate técnico?\n"
-            "3. **Insight:** ¿El formato que más vistas genera es también el que más se produce? Si no es así, indica la oportunidad.\n"
-            "Enfócate en la estrategia de producción."
+            "{context}{summary}\n\n"
+            "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas como 'El Formato Ganador:' o 'La Brecha:', "
+            "NO respondas con 'Sí'/'No'. Es un párrafo corrido.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- El tipo de video (Official, Lyric, Live) que lidera en vistas promedio, con su cifra.\n"
+            "- La brecha entre el primero y el segundo.\n"
+            "- Si el formato con más vistas es también el que más se produce; si no, "
+            "indica la oportunidad.\n\n"
+            "Usa los nombres de los tipos de video. "
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con el tipo de video líder o con su cifra."
         ),
         "en": (
-            "Analyze views by video type:\n\n{summary}\n\n"
-            "Write 4 to 6 lines. "
-            "1. **The Winning Format:** Mention which type (Official, Lyric, Live) leads in average views.\n"
-            "2. **Gap:** Compare 1st with 2nd. Is it a huge difference or a technical tie?\n"
-            "3. **Insight:** Is the format that generates the most views also the one that is produced the most? If not, state the opportunity.\n"
-            "Focus on production strategy."
-        )
+            "{context}{summary}\n\n"
+            "Write a SINGLE PARAGRAPH of 90-130 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO labels like 'The Winning Format:' or 'Gap:', "
+            "NO 'Yes'/'No' answers. It is a flowing paragraph.\n\n"
+            "Cover, without making it explicit:\n"
+            "- The video type (Official, Lyric, Live) that leads in average views, with its figure.\n"
+            "- The gap between first and second place.\n"
+            "- Whether the format with the most views is also the one produced the most; if not, "
+            "state the opportunity.\n\n"
+            "Use the video type names. "
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the leading video type or with its figure."
+        ),
     },
 
     "video_engagement": {
         "es": (
-            "Analiza el engagement por tipo de video:\n\n{summary}\n\n"
-            "Redacta 4 a 6 líneas. "
-            "1. **El Formato Más Querido:** Menciona qué tipo de video tiene el engagement promedio más alto.\n"
-            "2. **La Paradoja:** ¿Coincide con el que más vistas genera? Si no es así, explica qué revela esto (ej. los Lyric Videos generan menos vistas pero más conexión).\n"
-            "3. **Conclusión:** ¿Qué formato ofrece la mejor oportunidad de conexión profunda con la audiencia?\n"
-            "Sé directo."
+            "{context}{summary}\n\n"
+            "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas como 'El Formato Más Querido:' o 'La Paradoja:', "
+            "NO respondas con 'Sí'/'No'. Es un párrafo corrido.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- El tipo de video con el engagement promedio más alto, con su cifra.\n"
+            "- Si coincide o no con el que más vistas genera; si no coincide, "
+            "qué revela ese contraste.\n"
+            "- Qué formato ofrece la mejor oportunidad de conexión profunda con la audiencia.\n\n"
+            "Usa los nombres de los tipos de video. "
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con el tipo de video con mayor engagement o con su cifra."
         ),
         "en": (
-            "Analyze engagement by video type:\n\n{summary}\n\n"
-            "Write 4 to 6 lines. "
-            "1. **The Most Loved Format:** Mention which video type has the highest average engagement.\n"
-            "2. **The Paradox:** Does it match the one with the most views? If not, explain what this reveals (e.g., Lyric Videos generate fewer views but more connection).\n"
-            "3. **Conclusion:** Which format offers the best opportunity for deep connection with the audience?\n"
-            "Be direct."
-        )
+            "{context}{summary}\n\n"
+            "Write a SINGLE PARAGRAPH of 90-130 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO labels like 'The Most Loved Format:' or 'The Paradox:', "
+            "NO 'Yes'/'No' answers. It is a flowing paragraph.\n\n"
+            "Cover, without making it explicit:\n"
+            "- The video type with the highest average engagement, with its figure.\n"
+            "- Whether it matches or not the one with the most views; if it does not, "
+            "what that contrast reveals.\n"
+            "- Which format offers the best opportunity for deep connection with the audience.\n\n"
+            "Use the video type names. "
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the highest-engagement video type or with its figure."
+        ),
     },
 
     "video_duration": {
         "es": (
-            "Analiza la duración de los videos:\n\n{summary}\n\n"
-            "Redacta 4 a 6 líneas. "
-            "1. **La Duración Promedio:** Menciona la duración media y la mediana (en minutos).\n"
-            "2. **El Rango:** ¿Los videos son cortos (menos de 3 min) o largos (más de 5 min)? ¿Hay mucha diferencia entre el mínimo y el máximo?\n"
-            "3. **Implicación:** ¿Qué implica esto para la retención de la audiencia? ¿Son videos de formato 'single' o de formato 'álbum'?\n"
-            "Sé analítico."
+            "{context}{summary}\n\n"
+            "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas como 'La Duración Promedio:' o 'El Rango:', "
+            "NO respondas con 'Sí'/'No'. Es un párrafo corrido.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- La duración media y la mediana (en minutos), con sus cifras.\n"
+            "- Si los videos son cortos (menos de 3 min) o largos (más de 5 min), "
+            "y si hay mucha diferencia entre el mínimo y el máximo.\n"
+            "- Qué implica esto para la retención de la audiencia (formato single o álbum).\n\n"
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con la duración promedio o con la mediana."
         ),
         "en": (
-            "Analyze video duration:\n\n{summary}\n\n"
-            "Write 4 to 6 lines. "
-            "1. **The Average Duration:** Mention the mean and median duration (in minutes).\n"
-            "2. **The Range:** Are videos short (under 3 min) or long (over 5 min)? Is there a big difference between the minimum and maximum?\n"
-            "3. **Implication:** What does this imply for audience retention? Are they 'single' format or 'album' format videos?\n"
-            "Be analytical."
-        )
+            "{context}{summary}\n\n"
+            "Write a SINGLE PARAGRAPH of 90-130 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO labels like 'The Average Duration:' or 'The Range:', "
+            "NO 'Yes'/'No' answers. It is a flowing paragraph.\n\n"
+            "Cover, without making it explicit:\n"
+            "- The mean and median duration (in minutes), with their figures.\n"
+            "- Whether videos are short (under 3 min) or long (over 5 min), "
+            "and whether there is a big difference between the minimum and maximum.\n"
+            "- What this implies for audience retention (single vs album format).\n\n"
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the average duration or with the median."
+        ),
     },
 
     "video_channels": {
         "es": (
-            "Analiza la distribución por tipo de canal:\n\n{summary}\n\n"
-            "Redacta 4 a 6 líneas. "
-            "1. **El Canal Dominante:** Menciona qué tipo de canal (Artist, VEVO, Topic, etc.) tiene más canciones y su porcentaje.\n"
-            "2. **Diversidad:** ¿Hay muchos tipos de canal o el catálogo está concentrado en uno o dos?\n"
-            "3. **Implicación:** ¿Qué dice esto sobre la estrategia de distribución? ¿Es un catálogo de artistas independientes o de grandes sellos?\n"
-            "Sé directo."
+            "{context}{summary}\n\n"
+            "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas como 'El Canal Dominante:' o 'Diversidad:', "
+            "NO respondas con 'Sí'/'No'. Es un párrafo corrido.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- El tipo de canal (Artist, VEVO, Topic, etc.) con más canciones y su porcentaje.\n"
+            "- Si hay muchos tipos de canal o si el catálogo está concentrado en uno o dos.\n"
+            "- Qué dice esto sobre la estrategia de distribución (independiente vs grandes sellos).\n\n"
+            "Usa los nombres de los tipos de canal. "
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con el tipo de canal dominante o con su porcentaje."
         ),
         "en": (
-            "Analyze the distribution by channel type:\n\n{summary}\n\n"
-            "Write 4 to 6 lines. "
-            "1. **The Dominant Channel:** Mention which channel type (Artist, VEVO, Topic, etc.) has the most songs and its percentage.\n"
-            "2. **Diversity:** Are there many channel types or is the catalog concentrated in one or two?\n"
-            "3. **Implication:** What does this say about the distribution strategy? Is it an independent artist catalog or a major label one?\n"
-            "Be direct."
-        )
+            "{context}{summary}\n\n"
+            "Write a SINGLE PARAGRAPH of 90-130 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO labels like 'The Dominant Channel:' or 'Diversity:', "
+            "NO 'Yes'/'No' answers. It is a flowing paragraph.\n\n"
+            "Cover, without making it explicit:\n"
+            "- The channel type (Artist, VEVO, Topic, etc.) with the most songs and its percentage.\n"
+            "- Whether there are many channel types or if the catalog is concentrated in one or two.\n"
+            "- What this says about the distribution strategy (independent vs major labels).\n\n"
+            "Use the channel type names. "
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the dominant channel type or with its percentage."
+        ),
     },
 
     # ========================================================================
@@ -433,59 +780,93 @@ WRITER_PROMPTS = {
     # ========================================================================
     "temporal_views": {
         "es": (
-            "Analiza la evolución de vistas por trimestre:\n\n{summary}\n\n"
-            "Redacta 4 a 6 líneas. "
-            "1. **El Pico:** Identifica el trimestre con más vistas totales y su cifra exacta.\n"
-            "2. **La Tendencia:** ¿Las vistas suben, bajan o se mantienen estables a lo largo de los trimestres?\n"
-            "3. **Estacionalidad:** ¿Hay un patrón claro (ej. lanzamientos de verano, campañas de fin de año)?\n"
-            "Ve al grano."
+            "{context}{summary}\n\n"
+            "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas como 'El Pico:' o 'La Tendencia:', "
+            "NO respondas con 'Sí'/'No'. Es un párrafo corrido.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- El trimestre con más vistas totales y su cifra exacta.\n"
+            "- Si las vistas suben, bajan o se mantienen estables a lo largo de los trimestres.\n"
+            "- Si hay un patrón de estacionalidad (lanzamientos de verano, fin de año, etc.).\n\n"
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con el trimestre pico o con su cifra."
         ),
         "en": (
-            "Analyze views evolution by quarter:\n\n{summary}\n\n"
-            "Write 4 to 6 lines. "
-            "1. **The Peak:** Identify the quarter with the most total views and its exact figure.\n"
-            "2. **The Trend:** Do views rise, fall, or remain stable across quarters?\n"
-            "3. **Seasonality:** Is there a clear pattern (e.g., summer releases, year-end campaigns)?\n"
-            "Get to the point."
-        )
+            "{context}{summary}\n\n"
+            "Write a SINGLE PARAGRAPH of 90-130 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO labels like 'The Peak:' or 'The Trend:', "
+            "NO 'Yes'/'No' answers. It is a flowing paragraph.\n\n"
+            "Cover, without making it explicit:\n"
+            "- The quarter with the most total views and its exact figure.\n"
+            "- Whether views rise, fall, or remain stable across quarters.\n"
+            "- Whether there is a seasonality pattern (summer releases, year-end, etc.).\n\n"
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the peak quarter or with its figure."
+        ),
     },
 
     "temporal_engagement": {
         "es": (
-            "Analiza la evolución del engagement por trimestre:\n\n{summary}\n\n"
-            "Redacta 4 a 6 líneas. "
-            "1. **El Pico:** Identifica el trimestre con el engagement promedio más alto y su porcentaje.\n"
-            "2. **La Tendencia:** ¿La fidelidad de la audiencia se mantiene estable o varía con el tiempo?\n"
-            "3. **Insight:** ¿El trimestre con más vistas es también el de más engagement? Si no es así, explica qué revela esto.\n"
-            "Sé directo."
+            "{context}{summary}\n\n"
+            "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas como 'El Pico:' o 'La Tendencia:', "
+            "NO respondas con 'Sí'/'No'. Es un párrafo corrido.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- El trimestre con el engagement promedio más alto y su porcentaje exacto.\n"
+            "- Si la fidelidad de la audiencia se mantiene estable o varía con el tiempo.\n"
+            "- Si el trimestre con más vistas es también el de más engagement; si no, "
+            "qué revela eso.\n\n"
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con el trimestre de mayor engagement o con su porcentaje."
         ),
         "en": (
-            "Analyze engagement evolution by quarter:\n\n{summary}\n\n"
-            "Write 4 to 6 lines. "
-            "1. **The Peak:** Identify the quarter with the highest average engagement and its percentage.\n"
-            "2. **The Trend:** Does audience loyalty remain stable or fluctuate over time?\n"
-            "3. **Insight:** Is the quarter with the most views also the one with the most engagement? If not, explain what this reveals.\n"
-            "Be direct."
-        )
+            "{context}{summary}\n\n"
+            "Write a SINGLE PARAGRAPH of 90-130 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO labels like 'The Peak:' or 'The Trend:', "
+            "NO 'Yes'/'No' answers. It is a flowing paragraph.\n\n"
+            "Cover, without making it explicit:\n"
+            "- The quarter with the highest average engagement and its exact percentage.\n"
+            "- Whether audience loyalty remains stable or fluctuates over time.\n"
+            "- Whether the quarter with the most views is also the one with the most engagement; "
+            "if not, what that reveals.\n\n"
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the highest-engagement quarter or with its percentage."
+        ),
     },
 
     "temporal_releases": {
         "es": (
-            "Analiza la distribución de lanzamientos por trimestre:\n\n{summary}\n\n"
-            "Redacta 4 a 6 líneas. "
-            "1. **El Trimestre Más Activo:** Identifica el trimestre con más lanzamientos y su cifra exacta.\n"
-            "2. **La Distribución:** ¿Los lanzamientos están concentrados en un trimestre o distribuidos de forma equilibrada?\n"
-            "3. **Implicación:** ¿Qué dice esto sobre la estrategia de lanzamiento? ¿Es una campaña de verano o de fin de año?\n"
-            "Ve al grano."
+            "{context}{summary}\n\n"
+            "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas como 'El Trimestre Más Activo:' o 'La Distribución:', "
+            "NO respondas con 'Sí'/'No'. Es un párrafo corrido.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- El trimestre con más lanzamientos y su cifra exacta.\n"
+            "- Si los lanzamientos están concentrados en un trimestre o distribuidos "
+            "de forma equilibrada.\n"
+            "- Qué dice esto sobre la estrategia de lanzamiento (campaña de verano, "
+            "fin de año, etc.).\n\n"
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con el trimestre más activo o con su cifra."
         ),
         "en": (
-            "Analyze release distribution by quarter:\n\n{summary}\n\n"
-            "Write 4 to 6 lines. "
-            "1. **The Most Active Quarter:** Identify the quarter with the most releases and its exact figure.\n"
-            "2. **The Distribution:** Are releases concentrated in one quarter or evenly distributed?\n"
-            "3. **Implication:** What does this say about the release strategy? Is it a summer or year-end campaign?\n"
-            "Get to the point."
-        )
+            "{context}{summary}\n\n"
+            "Write a SINGLE PARAGRAPH of 90-130 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO labels like 'The Most Active Quarter:' or 'The Distribution:', "
+            "NO 'Yes'/'No' answers. It is a flowing paragraph.\n\n"
+            "Cover, without making it explicit:\n"
+            "- The quarter with the most releases and its exact figure.\n"
+            "- Whether releases are concentrated in one quarter or evenly distributed.\n"
+            "- What this says about the release strategy (summer campaign, year-end, etc.).\n\n"
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the most active quarter or with its figure."
+        ),
     },
 
     # ========================================================================
@@ -493,40 +874,69 @@ WRITER_PROMPTS = {
     # ========================================================================
     "collab_views": {
         "es": (
-            "Analiza las vistas: solistas vs colaboraciones:\n\n{summary}\n\n"
-            "Redacta 4 a 6 líneas. "
-            "1. **El Ganador:** Responde: ¿las colaboraciones o los solistas generan más vistas promedio?\n"
-            "2. **La Brecha:** Compara ambos con sus cifras exactas. ¿Es una diferencia significativa?\n"
-            "3. **Conclusión:** ¿Conviene colaborar para masificar o es mejor lanzar en solitario?\n"
-            "Sé analítico."
+            "{context}{summary}\n\n"
+            "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas como 'El Ganador:' o 'La Brecha:', "
+            "NO respondas con 'Sí'/'No'. Es un párrafo corrido.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- Si las colaboraciones o los solistas generan más vistas promedio, "
+            "con las cifras exactas de ambos grupos.\n"
+            "- Si esa diferencia es significativa o marginal, y qué implica para "
+            "la estrategia de colaboración.\n"
+            "- Una frase final que conecte los datos con una decisión concreta.\n\n"
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con la comparación o con la cifra."
         ),
         "en": (
-            "Analyze views: solo vs collaborations:\n\n{summary}\n\n"
-            "Write 4 to 6 lines. "
-            "1. **The Winner:** Answer: Do collaborations or solo artists generate more average views?\n"
-            "2. **Gap:** Compare both with their exact figures. Is it a significant difference?\n"
-            "3. **Conclusion:** Is it better to collaborate for mass reach or release solo?\n"
-            "Be analytical."
-        )
+            "{context}{summary}\n\n"
+            "Write a SINGLE PARAGRAPH of 90-130 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO labels like 'The Winner:' or 'The Gap:', "
+            "NO 'Yes'/'No' answers. It is a flowing paragraph.\n\n"
+            "Cover, without making it explicit:\n"
+            "- Whether collaborations or solo artists generate more average views, "
+            "with the exact figures for both groups.\n"
+            "- Whether that difference is significant or marginal, and what it implies "
+            "for the collaboration strategy.\n"
+            "- A closing sentence that links the data to a concrete decision.\n\n"
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the comparison or with the figure."
+        ),
     },
 
     "collab_engagement": {
         "es": (
-            "Analiza el engagement: solistas vs colaboraciones:\n\n{summary}\n\n"
-            "Redacta 4 a 6 líneas. "
-            "1. **El Ganador:** Responde: ¿las colaboraciones o los solistas generan más engagement promedio?\n"
-            "2. **La Paradoja:** ¿Coincide con el que genera más vistas? Si no es así, explica qué revela esto (ej. las colaboraciones fidelizan pero no masifican).\n"
-            "3. **Recomendación:** Termina con una recomendación: ¿conviene colaborar para fidelizar o para masificar?\n"
-            "Sé analítico."
+            "{context}{summary}\n\n"
+            "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+            "NO uses encabezados, NO numeres, NO uses viñetas, "
+            "NO uses etiquetas como 'El Ganador:' o 'La Paradoja:', "
+            "NO respondas con 'Sí'/'No'. Es un párrafo corrido.\n\n"
+            "Cubre, sin señalarlo explícitamente:\n"
+            "- Si las colaboraciones o los solistas generan más engagement promedio, "
+            "con las cifras exactas de ambos grupos.\n"
+            "- Si coincide o no con el grupo que genera más vistas; si no coincide, "
+            "qué revela ese contraste.\n"
+            "- Una recomendación final sobre si conviene colaborar para fidelizar "
+            "o para masificar.\n\n"
+            "No especules sobre causas que no estén en los datos.\n\n"
+            "Empieza directamente con la comparación o con la cifra."
         ),
         "en": (
-            "Analyze engagement: solo vs collaborations:\n\n{summary}\n\n"
-            "Write 4 to 6 lines. "
-            "1. **The Winner:** Answer: Do collaborations or solo artists generate more average engagement?\n"
-            "2. **The Paradox:** Does it match the one that generates the most views? If not, explain what this reveals (e.g., collaborations build loyalty but not mass reach).\n"
-            "3. **Recommendation:** End with a recommendation: is it better to collaborate for loyalty or mass reach?\n"
-            "Be analytical."
-        )
+            "{context}{summary}\n\n"
+            "Write a SINGLE PARAGRAPH of 90-130 words in flowing prose. "
+            "NO headers, NO numbering, NO bullet points, "
+            "NO labels like 'The Winner:' or 'The Paradox:', "
+            "NO 'Yes'/'No' answers. It is a flowing paragraph.\n\n"
+            "Cover, without making it explicit:\n"
+            "- Whether collaborations or solo artists generate more average engagement, "
+            "with the exact figures for both groups.\n"
+            "- Whether it matches or not the group that generates the most views; if it "
+            "does not, what that contrast reveals.\n"
+            "- A closing recommendation on whether to collaborate for loyalty or for mass reach.\n\n"
+            "Do not speculate about causes that are not in the data.\n\n"
+            "Start directly with the comparison or with the figure."
+        ),
     },
 }
 
@@ -536,18 +946,36 @@ class DeepSeekWriter:
         self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY")
         self.api_url = "https://api.deepseek.com/v1/chat/completions"
 
-    def polish(self, section_id: str, summary: str, language: str = "es") -> tuple[str, int]:
+    # ========================================================================
+    # PUBLIC API
+    # ========================================================================
+    def polish(
+        self,
+        section_id: str,
+        summary: str,
+        language: str = "es",
+        period_label: str = "",
+        total_songs: int = 0,
+    ) -> tuple[str, int]:
         """
         Polish the raw summary using DeepSeek.
-        
+
         Parameters
         ----------
         section_id : str
-            The report section identifier (e.g., 'general_stats', 'introduction', 'conclusion').
+            The report section identifier (e.g., 'general_stats',
+            'introduction', 'conclusion').
         summary : str
             The raw summary generated by Groq, Gemma, or Muse Spark.
         language : str
             "es" or "en".
+        period_label : str
+            Optional ISO week label (e.g., "2026-W46"). When provided, it is
+            injected into the prompt as context. When empty, the context block
+            is omitted and the prompt works unchanged.
+        total_songs : int
+            Optional total number of songs in the chart. Only used when
+            `period_label` is also provided.
 
         Returns
         -------
@@ -561,104 +989,121 @@ class DeepSeekWriter:
             print("   [Writer] DeepSeek API key not found. Using raw summary.")
             return summary, 0
 
-        # Safely get the prompt for the specific section and language
         section_prompts = WRITER_PROMPTS.get(section_id, {})
         prompt_template = section_prompts.get(language, section_prompts.get("es", ""))
 
         if not prompt_template:
-            print(f"   [Writer] Warning: No prompt found for section '{section_id}' and language '{language}'. Using raw summary.")
+            print(
+                f"   [Writer] Warning: No prompt found for section '{section_id}' "
+                f"and language '{language}'. Using raw summary."
+            )
             return summary, 0
 
-        prompt = prompt_template.format(summary=summary)
+        context = _build_context(language, period_label, total_songs)
+        prompt = prompt_template.format(context=context, summary=summary)
+
+        max_tokens = _MAX_TOKENS_OVERRIDE.get(section_id, _DEFAULT_MAX_TOKENS)
+        system_message = _build_system_message(language)
 
         try:
             response = requests.post(
                 self.api_url,
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
                 },
                 json={
                     "model": "deepseek-chat",
                     "messages": [
-                        {"role": "system", "content": "You are an expert music journalist."},
-                        {"role": "user", "content": prompt}
+                        {"role": "system", "content": system_message},
+                        {"role": "user", "content": prompt},
                     ],
                     "temperature": 0.6,
-                    "max_tokens": 400
+                    "max_tokens": max_tokens,
                 },
-                timeout=30
+                timeout=60,
             )
             response.raise_for_status()
             data = response.json()
-            
+
             final_text = data["choices"][0]["message"]["content"].strip()
             tokens_used = data.get("usage", {}).get("total_tokens", 0)
-            
+
             return final_text, tokens_used
-            
+
         except Exception as e:
             print(f"   [Writer] DeepSeek failed: {e}")
-            # Fallback: devolver el resumen crudo para no dejar el reporte sin análisis
             print("   [Writer] Falling back to the raw summary.")
             return summary, 0
 
-    def polish_from_table(self, section_id: str, table_md: str, language: str = "es") -> tuple[str, int]:
+    def polish_from_table(
+        self,
+        section_id: str,
+        table_md: str,
+        language: str = "es",
+        period_label: str = "",
+        total_songs: int = 0,
+    ) -> tuple[str, int]:
         """
-        Fallback method: Ask DeepSeek to analyze the raw table directly.
+        Fallback method: ask DeepSeek to analyze the raw table directly.
         Used when all small summarizer models fail.
         """
         if not table_md or not self.api_key:
             return "", 0
 
-        # Build a generic prompt for table analysis
-        if language == "es":
+        context = _build_context(language, period_label, total_songs)
+
+        if language == "en":
             prompt = (
-                "Eres un analista de datos musicales. "
-                "Analiza la siguiente tabla:\n\n"
+                f"{context}"
+                "Analyze the following table:\n\n"
                 f"{table_md}\n\n"
-                "Escribe un análisis ejecutivo de 4 a 6 líneas. "
-                "Menciona el dato más alto, el segundo y el tercero, "
-                "y destaca cualquier anomalía o tendencia notable. "
-                "Usa un tono directo y analítico. No inventes datos."
+                "Write a SINGLE PARAGRAPH of 100-150 words in flowing prose. "
+                "NO headers, NO numbering, NO bullet points, NO section labels. "
+                "Mention the highest data point, the second and third, and highlight "
+                "any anomaly or notable trend, with exact figures. "
+                "Do not invent data. Do not speculate about causes that are not in the table."
             )
         else:
             prompt = (
-                "You are a music data analyst. "
-                "Analyze the following table:\n\n"
+                f"{context}"
+                "Analiza la siguiente tabla:\n\n"
                 f"{table_md}\n\n"
-                "Write an executive analysis of 4 to 6 lines. "
-                "Mention the highest data point, the second and third, "
-                "and highlight any anomaly or notable trend. "
-                "Use a direct and analytical tone. Do not invent data."
+                "Escribe UN SOLO PÁRRAFO de 90-130 palabras en prosa fluida. "
+                "NO uses encabezados, NO numeres, NO uses viñetas, NO uses etiquetas de sección. "
+                "Menciona el dato más alto, el segundo y el tercero, y destaca cualquier "
+                "anomalía o tendencia notable, con cifras exactas. "
+                "No inventes datos. No especules sobre causas que no estén en la tabla."
             )
+
+        system_message = _build_system_message(language)
 
         try:
             response = requests.post(
                 self.api_url,
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
                 },
                 json={
                     "model": "deepseek-chat",
                     "messages": [
-                        {"role": "system", "content": "You are an expert music data analyst."},
-                        {"role": "user", "content": prompt}
+                        {"role": "system", "content": system_message},
+                        {"role": "user", "content": prompt},
                     ],
                     "temperature": 0.4,
-                    "max_tokens": 300
+                    "max_tokens": 1200,
                 },
-                timeout=30
+                timeout=60,
             )
             response.raise_for_status()
             data = response.json()
-            
+
             final_text = data["choices"][0]["message"]["content"].strip()
             tokens_used = data.get("usage", {}).get("total_tokens", 0)
-            
+
             return final_text, tokens_used
-            
+
         except Exception as e:
             print(f"   [Writer] DeepSeek fallback failed: {e}")
             return "", 0
