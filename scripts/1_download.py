@@ -143,10 +143,6 @@ def get_week_identifier(date: datetime = None) -> str:
 # YOUTUBE CHARTS DOWNLOADER
 # ============================================================================
 async def download_youtube_charts() -> Path | None:
-    """
-    Download YouTube Charts data using Playwright browser automation.
-    Simulates realistic human interaction to bypass anti-bot measures.
-    """
     print("🎵 YouTube Charts - Downloading complete CSV (100 songs)")
     print("=" * 70)
 
@@ -156,7 +152,6 @@ async def download_youtube_charts() -> Path | None:
         print("1. 🚀 Starting browser...")
 
         async with async_playwright() as p:
-            # Argumentos optimizados para GitHub Actions (Linux) y evasión
             browser = await p.chromium.launch(
                 headless=True,
                 args=[
@@ -196,7 +191,6 @@ async def download_youtube_charts() -> Path | None:
                 },
             )
 
-            # Script de evasión profunda (Simula un navegador real)
             await context.add_init_script(
                 """
                 Object.defineProperty(navigator, 'webdriver', {
@@ -221,17 +215,31 @@ async def download_youtube_charts() -> Path | None:
 
             print("2. 🌐 Navigating to YouTube Charts...")
             url = "https://charts.youtube.com/charts/TopSongs/global/weekly"
-            
             await page.goto(url, wait_until="domcontentloaded", timeout=90_000)
-            
+
             print("3. ⏳ Waiting for page to fully load...")
-            try:
-                await page.wait_for_selector("#download-button", state="attached", timeout=30_000)
-                print("   ✅ Botón detectado en el DOM")
-            except Exception:
-                print("   ⚠️ El botón no apareció a tiempo, continuando de todas formas...")
-            
-            await page.wait_for_timeout(5000) 
+            # Bucle de reintentos para encontrar el botón
+            button_found = False
+            for attempt in range(3):
+                try:
+                    print(f"   🔎 Intento {attempt + 1}/3 buscando el botón...")
+                    await page.wait_for_selector("#download-button", state="attached", timeout=20_000)
+                    print("   ✅ Botón detectado en el DOM")
+                    button_found = True
+                    break
+                except Exception:
+                    print("   ⚠️ Botón no encontrado aún. Recargando la página...")
+                    await page.reload(wait_until="domcontentloaded")
+                    await page.wait_for_timeout(5000)
+
+            if not button_found:
+                print("   ❌ El botón no apareció tras 3 intentos.")
+                # Tomamos screenshot para diagnosticar antes de fallar
+                await page.screenshot(path=str(ARCHIVE_DIR / "error_no_button.png"))
+                await browser.close()
+                return None
+
+            await page.wait_for_timeout(3000)
 
             print("4. 📜 Scrolling to load dynamic content...")
             for _ in range(3):
@@ -241,19 +249,16 @@ async def download_youtube_charts() -> Path | None:
             print("5. 🔍 SEARCHING FOR DOWNLOAD BUTTON...")
             filename = ARCHIVE_DIR / "latest_chart.csv"
 
-            print("   🎯 Triggering download from Context level...")
+            print("   🎯 Triggering download from PAGE level...")
             try:
-                # A nivel de context es más seguro para descargas dinámicas
-                async with context.expect_download(timeout=60_000) as dl_info:
-                    # Técnica avanzada: Disparar evento 'click' nativo del navegador
+                # Usamos page.expect_download, NO context.
+                async with page.expect_download(timeout=60_000) as dl_info:
                     await page.evaluate("""
                         const btn = document.querySelector('#download-button');
                         if (btn) {
-                            // Simular hover
                             const mouseoverEvent = new Event('mouseover', { bubbles: true });
                             btn.dispatchEvent(mouseoverEvent);
                             
-                            // Clic sintético (evade validación isTrusted)
                             const clickEvent = new MouseEvent('click', {
                                 view: window,
                                 bubbles: true,
@@ -262,11 +267,8 @@ async def download_youtube_charts() -> Path | None:
                             btn.dispatchEvent(clickEvent);
                         }
                     """)
-                    
-                    # Damos tiempo a que el navegador procese el Blob/Descarga
                     await page.wait_for_timeout(3000)
 
-                # Si llegamos aquí, Playwright capturó la descarga
                 download = await dl_info.value
                 await download.save_as(filename)
                 
@@ -276,11 +278,11 @@ async def download_youtube_charts() -> Path | None:
 
             except Exception as e:
                 print(f"   ❌ Error al descargar: {e}")
-                # Tomar captura de pantalla para depurar en GitHub Actions
                 error_img = ARCHIVE_DIR / "error_github_actions.png"
-                await page.screenshot(path=error_img)
+                await page.screenshot(path=str(error_img))
                 print(f"   📸 Captura guardada en {error_img}")
-                raise e # Relanzamos el error para que main() lo detenga
+                # Relanzamos para que falle estrictamente
+                raise e
 
     except Exception as e:
         print(f"⚠️  Error crítico en el proceso: {e}")
