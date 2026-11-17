@@ -5,50 +5,16 @@ Top-level entry point for downloading the weekly YouTube Charts Top 100 songs
 and persisting them into a localized SQLite database. This module acts as the
 first stage in the broader intelligence pipeline.
 
-This script orchestrates the extraction of chart data using the `ytmusicapi`
-library, circumventing the need for browser automation and its associated
-anti-bot mitigations. It implements a strict "fail-hard" policy: if the
-extraction or persistence fails, the pipeline aborts immediately to prevent
-data pollution from fallback synthetic records.
-
-Features
---------
-- Downloads the complete weekly Top 100 songs CSV from YouTube Charts.
-- Leverages `ytmusicapi` for direct API access, bypassing HTML parsing and
-  browser CAPTCHAs.
-- Enriches data with exact metrics (Rank, Previous Rank, Views, Growth,
-  Periods on Chart, YouTube URL) where available.
-- Stores historical data in SQLite with versioning based on ISO week format
-  (`YYYY-WXX`).
-- Implements an automatic backup system before database mutations.
-- Enforces a strict no-fallback policy: pipeline aborts if extraction fails.
+This script uses a hybrid approach:
+1. `ytmusicapi` to fetch the base playlist and video IDs reliably.
+2. `httpx` to query the `charts.youtube.com` InnerTube API (using the "WEB" 
+   client) to extract exact weekly metrics (Views, Growth, Previous Rank, 
+   Periods on Chart).
 
 Dependencies
 ------------
 - Internal: none (self-contained script).
-- External: `ytmusicapi`, `pandas`, `sqlite3` (stdlib), `asyncio`, `shutil`,
-  `subprocess`.
-- Downstream: Script 2.1 (Artist Metadata Enrichment) consumes the generated
-  SQLite databases.
-
-Requirements
-------------
-- Python 3.7+
-- `ytmusicapi` and `pandas` installed (auto-installed if missing).
-- Write access to the `charts_archive/` directory structure.
-
-Notes
------
-- **Directory structure**: Automatically creates `data/`,
-  `charts_archive/1_download-chart/databases/`, and
-  `charts_archive/1_download-chart/backup/` on import.
-- **Week identifiers**: Follow ISO format `YYYY-WXX` (e.g., `2026-W47`).
-- **Strict Mode**: The legacy fallback mode (generating 100 synthetic records)
-  has been permanently removed. If the API fails, the script exits with code 1.
-- **Backup retention**: Backups are retained for 7 days; databases are
-  retained for 52 weeks.
-- **API Stability**: `ytmusicapi` is used over raw InnerTube requests to
-  automatically handle dynamic `clientVersion` generation and token rotation.
+- External: `httpx`, `ytmusicapi`, `pandas`, `sqlite3` (stdlib).
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence 
@@ -74,7 +40,6 @@ DATABASE_DIR = ARCHIVE_DIR / "databases"
 BACKUP_DIR = ARCHIVE_DIR / "backup"
 DOWNLOAD_DIR = ARCHIVE_DIR / "downloads"
 
-# Ensure all required directories exist before any file operations.
 for dir_path in [OUTPUT_DIR, ARCHIVE_DIR, DATABASE_DIR, BACKUP_DIR, DOWNLOAD_DIR]:
     dir_path.mkdir(parents=True, exist_ok=True)
 
@@ -82,22 +47,17 @@ for dir_path in [OUTPUT_DIR, ARCHIVE_DIR, DATABASE_DIR, BACKUP_DIR, DOWNLOAD_DIR
 # DEPENDENCY MANAGEMENT
 # ============================================================================
 def install_dependencies() -> bool:
-    """
-    Check and install required external dependencies if needed.
-    
-    Uses `ytmusicapi` for API access and `pandas` for data manipulation.
-    """
-    print("🔧 Checking dependencies (ytmusicapi, pandas)...")
+    print("🔧 Checking dependencies (httpx, ytmusicapi, pandas)...")
     try:
+        import httpx
         from ytmusicapi import YTMusic
         import pandas
         print("   ✅ Dependencies are installed")
         return True
     except ImportError:
-        print("   📦 Installing ytmusicapi and pandas...")
-        # Use sys.executable to ensure installation in the current virtual environment.
+        print("   📦 Installing dependencies...")
         subprocess.run(
-            [sys.executable, "-m", "pip", "install", "ytmusicapi", "pandas"], 
+            [sys.executable, "-m", "pip", "install", "httpx", "ytmusicapi", "pandas"], 
             check=True
         )
         print("   ✅ Dependencies installed")
@@ -107,227 +67,189 @@ def install_dependencies() -> bool:
 # WEEK IDENTIFIER
 # ============================================================================
 def get_week_identifier(date: datetime = None) -> str:
-    """
-    Generate ISO week identifier string (e.g., '2026-W47').
-    
-    Args:
-        date (datetime, optional): The date to extract the week from. 
-                                   Defaults to current datetime.
-    
-    Returns:
-        str: Formatted ISO week string.
-    """
     if date is None:
         date = datetime.now()
     year, week_num, _ = date.isocalendar()
     return f"{year}-W{week_num:02d}"
 
 # ============================================================================
-# YOUTUBE CHARTS DOWNLOADER (ytmusicapi)
+# YOUTUBE CHARTS DOWNLOADER (Hybrid Approach)
 # ============================================================================
 async def download_youtube_charts() -> Path | None:
-    """
-    Download YouTube Charts data using `ytmusicapi`.
-    
-    This function bypasses browser automation entirely. It queries the YouTube
-    Music API for the global weekly charts, extracts the Top 100 tracks, and
-    serializes them into a CSV file. It attempts to extract exact chart metrics
-    where available.
-    
-    Returns:
-        Path | None: The path to the generated CSV file if successful, 
-                     None otherwise.
-    """
-    print("🎵 YouTube Charts - Downloading via ytmusicapi")
+    print("🎵 YouTube Charts - Downloading Exact Metrics")
     print("=" * 70)
 
     try:
+        import httpx
         from ytmusicapi import YTMusic
         import pandas as pd
 
-        print("1. 📡 Connecting to YouTube Music API...")
-        # Initialize unauthenticated client for public chart data.
+        # ---------------------------------------------------------------------
+        # STEP 1: Use ytmusicapi to get the reliable list of video IDs
+        # ---------------------------------------------------------------------
+        print("1. 📡 Fetching base playlist via ytmusicapi...")
         yt = YTMusic()
-
-        print("2. 📊 Fetching global weekly charts...")
-        # 'ZZ' is the country code for Global charts.
         charts = yt.get_charts(country="ZZ")
-
-        # Persist raw JSON for debugging and downstream auditing.
-        raw_debug_path = ARCHIVE_DIR / "raw_ytmusicapi_response.json"
-        with open(raw_debug_path, "w", encoding="utf-8") as f:
-            json.dump(charts, f, indent=2)
-        print(f"   📄 Raw JSON saved to: {raw_debug_path}")
-
-        # Extract the playlist ID for Top Songs.
-        # The structure typically maps to 'videos' for Top Music Videos.
+        
         playlist_id = None
         if "videos" in charts and charts["videos"]:
             playlist_id = charts["videos"][0].get("playlistId")
-            print(f"   🎯 Playlist ID found: {playlist_id}")
-        
+            
         if not playlist_id:
-            print("   ❌ No playlist found in charts response.")
+            print("   ❌ No playlist found in ytmusicapi response.")
             return None
 
-        print("3. 📥 Fetching tracks from playlist...")
-        # Limit to 100 to match the official Top 100 chart scope.
         playlist = yt.get_playlist(playlist_id, limit=100)
-        
-        songs = []
-        for idx, track in enumerate(playlist.get("tracks", []), start=1):
-            # Extract Video ID for the URL
-            video_id = track.get("videoId", "")
-            youtube_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else ""
-            
-            # Attempt to extract specific chart metrics.
-            # `ytmusicapi` may not always provide these directly in `get_playlist`.
-            # We use .get() with defaults to prevent KeyErrors.
-            views = track.get("views", "0")
-            growth = track.get("growth", "N/A")
-            periods = track.get("periods", "N/A")
-            prev_rank = track.get("previousRank", "N/A")
+        yt_tracks = {}
+        for track in playlist.get("tracks", []):
+            vid = track.get("videoId")
+            if vid:
+                yt_tracks[vid] = {
+                    "title": track.get("title", ""),
+                    "artists": ", ".join([a.get("name", "") for a in track.get("artists", [])])
+                }
+        print(f"   ✅ ytmusicapi retrieved {len(yt_tracks)} tracks.")
 
+        # ---------------------------------------------------------------------
+        # STEP 2: Use httpx to query charts.youtube.com for exact metrics
+        # ---------------------------------------------------------------------
+        print("2. 📊 Fetching exact metrics from charts.youtube.com API...")
+        
+        today_str = datetime.now().strftime("%Y%m%d")
+        # charts.youtube.com uses the standard "WEB" client, NOT "WEB_REMIX"
+        client_version = f"2.{today_str}.01.00"
+
+        url = "https://charts.youtube.com/youtubei/v1/browse"
+        payload = {
+            "context": {
+                "client": {
+                    "clientName": "WEB",  # Correct client for charts.youtube.com
+                    "clientVersion": client_version,
+                    "hl": "en",
+                    "gl": "US",
+                }
+            },
+            "browseId": "FEmusic_charts",
+            "query": "chart_params_type=WEEK&perspective=CHART&flags=viral_video_chart&selected_chart=TRACKS",
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Referer": "https://charts.youtube.com/",
+            "Origin": "https://charts.youtube.com",
+        }
+
+        exact_metrics = {}
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(url, json=payload, headers=headers)
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    # Save raw JSON for debugging
+                    with open(ARCHIVE_DIR / "raw_api_response.json", "w", encoding="utf-8") as f:
+                        json.dump(data, f, indent=2)
+
+                    # Recursively search for chart entries
+                    def extract_metrics(obj):
+                        if isinstance(obj, dict):
+                            if "chartEntryData" in obj and "trackMetadata" in obj:
+                                meta = obj["trackMetadata"]
+                                entry = obj["chartEntryData"]
+                                vid = meta.get("videoId")
+                                if vid:
+                                    metric = entry.get("rankingMetric", {})
+                                    exact_metrics[vid] = {
+                                        "rank": entry.get("currentRank", 0),
+                                        "prev_rank": entry.get("previousRank", "N/A"),
+                                        "periods": entry.get("appearancesOnChart", "N/A"),
+                                        "views": int(''.join(filter(str.isdigit, str(metric.get("value", "0"))))),
+                                        "growth": metric.get("change", "N/A"),
+                                    }
+                                return
+                            for v in obj.values():
+                                extract_metrics(v)
+                        elif isinstance(obj, list):
+                            for item in obj:
+                                extract_metrics(item)
+                    
+                    extract_metrics(data)
+                    print(f"   ✅ Extracted exact metrics for {len(exact_metrics)} tracks.")
+                else:
+                    print(f"   ⚠️  API returned HTTP {response.status_code}. Falling back to ytmusicapi data.")
+        except Exception as e:
+            print(f"   ⚠️  Error querying charts API: {e}. Falling back.")
+
+        # ---------------------------------------------------------------------
+        # STEP 3: Merge Data
+        # ---------------------------------------------------------------------
+        print("3. 🛠️  Merging data...")
+        songs = []
+        for idx, (vid, yt_data) in enumerate(yt_tracks.items(), start=1):
+            # Check if we have exact metrics for this video ID
+            metrics = exact_metrics.get(vid, {})
+            
             songs.append({
-                "Rank": idx,
-                "[Previous Rank]": prev_rank,
-                "[Track Name]": track.get("title", ""),
-                "[Artist Names]": ", ".join([a.get("name", "") for a in track.get("artists", [])]),
-                "[Periods on Chart]": periods,
-                "Views": views,
-                "Growth": growth,
-                "[YouTube URL]": youtube_url,
+                "Rank": metrics.get("rank", idx),
+                "[Previous Rank]": metrics.get("prev_rank", "N/A"),
+                "[Track Name]": yt_data["title"],
+                "[Artist Names]": yt_data["artists"],
+                "[Periods on Chart]": metrics.get("periods", "N/A"),
+                "Views": metrics.get("views", 0),
+                "Growth": metrics.get("growth", "N/A"),
+                "[YouTube URL]": f"https://www.youtube.com/watch?v={vid}",
             })
 
+        # Sort by Rank (in case ytmusicapi returned them out of order)
+        songs.sort(key=lambda x: x["Rank"])
+
         if not songs:
-            print("   ❌ No tracks found in playlist.")
+            print("   ❌ No tracks found.")
             return None
 
-        print(f"   ✅ Extracted {len(songs)} tracks.")
-
-        # Serialize to CSV using pandas for consistent formatting.
+        # ---------------------------------------------------------------------
+        # STEP 4: Save to CSV
+        # ---------------------------------------------------------------------
         filename = DOWNLOAD_DIR / "latest_chart.csv"
-        df = pd.DataFrame(songs)
-        df.to_csv(filename, index=False, encoding="utf-8")
+        fieldnames = [
+            "Rank", "[Previous Rank]", "[Track Name]", "[Artist Names]",
+            "[Periods on Chart]", "Views", "Growth", "[YouTube URL]"
+        ]
+        
+        with open(filename, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(songs)
 
         print(f"   💾 CSV saved: {filename} ({filename.stat().st_size} bytes)")
         return filename
 
     except Exception as e:
-        print(f"⚠️  Error with ytmusicapi: {e}")
+        print(f"⚠️  Error: {e}")
         import traceback
         traceback.print_exc()
         return None
 
-# ============================================================================
-# DATABASE MANAGEMENT
-# ============================================================================
-def create_backup_before_update(week_id: str) -> None:
-    """
-    Create a timestamped backup of the existing SQLite database before update.
-    
-    Args:
-        week_id (str): The ISO week identifier.
-    """
-    db_path = DATABASE_DIR / f"youtube_charts_{week_id}.db"
-    if not db_path.exists(): 
-        return
-    
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = BACKUP_DIR / f"backup_{week_id}_{timestamp}.db"
-    
-    try:
-        shutil.copy2(db_path, backup_path)
-        print(f"   ✅ Backup created: {backup_path.name}")
-    except Exception as e:
-        print(f"   ⚠️  Error creating backup: {e}")
-
-def cleanup_old_backups(days: int = 7) -> None:
-    """
-    Remove backup files older than the specified retention period.
-    
-    Args:
-        days (int): Retention period in days.
-    """
-    print(f"   🧹 Cleaning backups older than {days} days...")
-    cutoff_date = datetime.now() - timedelta(days=days)
-    deleted_count = 0
-    
-    for backup in BACKUP_DIR.glob("backup_*.db"):
-        if backup.stat().st_mtime < cutoff_date.timestamp():
-            try:
-                backup.unlink()
-                deleted_count += 1
-            except Exception as e:
-                print(f"   ⚠️  Error deleting {backup.name}: {e}")
-                
-    if deleted_count > 0:
-        print(f"   ✅ Deleted {deleted_count} old backup(s)")
-    else:
-        print("   ℹ️  No old backups to delete")
-
-def cleanup_old_databases(weeks: int = 52) -> None:
-    """
-    Remove database files older than the specified retention period.
-    
-    Args:
-        weeks (int): Retention period in weeks.
-    """
-    print(f"   🧹 Cleaning databases older than {weeks} weeks...")
-    cutoff_date = datetime.now() - timedelta(weeks=weeks)
-    deleted_count = 0
-    
-    for db in DATABASE_DIR.glob("youtube_charts_*.db"):
-        try:
-            week_id = db.stem.replace("youtube_charts_", "")
-            year, week = map(int, week_id.split("-W"))
-            db_date = datetime.strptime(f"{year}-W{week:02d}-1", "%Y-W%W-%w")
-            
-            if db_date < cutoff_date:
-                db.unlink()
-                deleted_count += 1
-                print(f"      ✅ Deleted: {db.name}")
-        except Exception as e:
-            print(f"   ⚠️  Error processing {db.name}: {e}")
-            
-    if deleted_count > 0:
-        print(f"   ✅ Deleted {deleted_count} old database(s)")
-    else:
-        print("   ℹ️  No old databases to delete")
 
 # ============================================================================
 # SQLITE PERSISTENCE
 # ============================================================================
 def update_sqlite_database(csv_path: Path, week_id: str) -> Path | None:
-    """
-    Update the SQLite database with the new chart data.
-    
-    Implements an atomic update strategy: inserts data into a temp table,
-    then replaces the target table/rows within a transaction. Includes schema
-    validation to handle structural changes gracefully.
-    
-    Args:
-        csv_path (Path): Path to the downloaded CSV file.
-        week_id (str): The ISO week identifier.
-        
-    Returns:
-        Path | None: The path to the updated database, or None on failure.
-    """
-    print("   📊 Processing chart data...")
+    print("   📊 Processing chart data into SQLite...")
     try:
         import sqlite3
         import pandas as pd
 
         df = pd.read_csv(csv_path, encoding="utf-8")
         
-        # Enrich dataframe with metadata for historical tracking.
         current_time = datetime.now()
         df["download_date"] = current_time.strftime("%Y-%m-%d")
         df["download_time"] = current_time.strftime("%H:%M:%S")
         df["week_id"] = week_id
         df["timestamp"] = current_time.strftime("%Y%m%d_%H%M%S")
 
-        # Reorder columns to match the exact database schema requested.
         columns_order = [
             "Rank", "[Previous Rank]", "[Track Name]", "[Artist Names]",
             "[Periods on Chart]", "Views", "Growth", "[YouTube URL]",
@@ -342,7 +264,6 @@ def update_sqlite_database(csv_path: Path, week_id: str) -> Path | None:
         conn = sqlite3.connect(db_path)
         temp_table_name = f"temp_{current_time.strftime('%Y%m%d_%H%M%S')}"
         
-        # Explicitly define the schema to ensure correct data types.
         cursor = conn.cursor()
         cursor.execute(f"""
             CREATE TABLE {temp_table_name} (
@@ -361,22 +282,17 @@ def update_sqlite_database(csv_path: Path, week_id: str) -> Path | None:
             )
         """)
         
-        # Insert data row by row.
         for _, row in df.iterrows():
             cursor.execute(f"""
                 INSERT INTO {temp_table_name} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, tuple(row))
 
-        # Handle the main table.
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chart_data'")
         
         if cursor.fetchone():
-            # Schema validation: check if column count matches.
             cursor.execute("PRAGMA table_info(chart_data)")
             existing_cols = len(cursor.fetchall())
-            
             if existing_cols != 12:
-                print(f"   ⚠️  Schema mismatch: existing table has {existing_cols} columns. Rebuilding...")
                 cursor.execute("DROP TABLE chart_data")
                 cursor.execute(f"ALTER TABLE {temp_table_name} RENAME TO chart_data")
             else:
@@ -388,7 +304,6 @@ def update_sqlite_database(csv_path: Path, week_id: str) -> Path | None:
 
         conn.commit()
         conn.close()
-        
         print(f"   ✅ Database updated: {db_path}")
         return db_path
         
@@ -397,33 +312,53 @@ def update_sqlite_database(csv_path: Path, week_id: str) -> Path | None:
         return None
 
 # ============================================================================
-# MAIN ORCHESTRATION
+# BACKUP & CLEANUP
+# ============================================================================
+def create_backup_before_update(week_id: str) -> None:
+    db_path = DATABASE_DIR / f"youtube_charts_{week_id}.db"
+    if not db_path.exists(): return
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = BACKUP_DIR / f"backup_{week_id}_{timestamp}.db"
+    shutil.copy2(db_path, backup_path)
+    print(f"   ✅ Backup created: {backup_path.name}")
+
+def cleanup_old_backups(days: int = 7) -> None:
+    cutoff_date = datetime.now() - timedelta(days=days)
+    for backup in BACKUP_DIR.glob("backup_*.db"):
+        if backup.stat().st_mtime < cutoff_date.timestamp():
+            backup.unlink()
+
+def cleanup_old_databases(weeks: int = 52) -> None:
+    cutoff_date = datetime.now() - timedelta(weeks=weeks)
+    for db in DATABASE_DIR.glob("youtube_charts_*.db"):
+        try:
+            week_id = db.stem.replace("youtube_charts_", "")
+            year, week = map(int, week_id.split("-W"))
+            db_date = datetime.strptime(f"{year}-W{week:02d}-1", "%Y-W%W-%w")
+            if db_date < cutoff_date:
+                db.unlink()
+        except Exception:
+            pass
+
+# ============================================================================
+# MAIN
 # ============================================================================
 def main() -> int:
-    """
-    Entry point for the download and persistence pipeline.
-    
-    Returns:
-        int: Exit code (0 for success, 1 for failure).
-    """
     print("\n" + "=" * 70)
-    print("🎵 YOUTUBE CHARTS - EXTRACTOR (No Fallback)")
+    print("🎵 YOUTUBE CHARTS - HYBRID EXTRACTOR (No Fallback)")
     print("=" * 70)
 
     if not install_dependencies():
-        print("❌ CRITICAL: Dependency installation failed. Aborting.")
         return 1
 
     week_id = get_week_identifier()
     print(f"\n📆 Current week: {week_id}")
 
-    print("\n1. 📥 DOWNLOADING YOUTUBE CHARTS (Strict Mode)...")
+    print("\n1. 📥 DOWNLOADING YOUTUBE CHARTS...")
     csv_path = asyncio.run(download_youtube_charts())
 
-    # Strict mode: Abort if download fails. No synthetic data allowed.
     if not csv_path or not csv_path.exists():
         print("\n❌ CRITICAL ERROR: Automatic download failed.")
-        print("🛑 Fallback mode disabled. Aborting execution to prevent data pollution.")
         return 1
 
     print("\n2. 🗃️  STORING IN SQLITE DATABASE...")
@@ -442,8 +377,5 @@ def main() -> int:
     print("=" * 70)
     return 0
 
-# ============================================================================
-# ENTRY POINT
-# ============================================================================
 if __name__ == "__main__":
     sys.exit(main())
