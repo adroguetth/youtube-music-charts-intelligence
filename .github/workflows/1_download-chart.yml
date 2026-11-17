@@ -16,9 +16,8 @@ jobs:
     name: Download and Store YouTube Charts
     runs-on: ubuntu-latest
     
-    # Reduced timeout from 30m to 15m. 
-    # Since we transitioned from Playwright (browser automation) to ytmusicapi (direct HTTP),
-    # the execution time is now ~5 seconds. 15m provides a safe buffer for network latency.
+    # Timeout set to 15 minutes. Apify usually takes 30-60 seconds,
+    # but this provides a safe buffer for network latency or queue times.
     timeout-minutes: 15
     
     permissions:
@@ -41,10 +40,9 @@ jobs:
     - name: 📦 Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # NOTE: We no longer install Playwright or Chromium browsers.
-        # The extraction logic now relies entirely on 'ytmusicapi' and 'pandas'.
-        # This drastically reduces workflow execution time and resource consumption.
-        pip install ytmusicapi pandas
+        # NOTE: We now rely on Apify for data extraction. 
+        # We only need httpx to make the API request and pandas for data manipulation.
+        pip install httpx pandas
     
     - name: 📁 Create directory structure
       run: |
@@ -62,6 +60,8 @@ jobs:
       run: |
         python scripts/1_download.py
       env:
+        # Inject the Apify token from GitHub Secrets
+        APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
         # Injects a flag to allow the script to detect it's running in a CI/CD environment
         GITHUB_ACTIONS: true
     
