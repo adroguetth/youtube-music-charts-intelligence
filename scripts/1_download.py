@@ -1,34 +1,10 @@
 """
 YouTube Charts Data Scraper - Download & Persistence Pipeline
 ============================================================================
-Top-level entry point for downloading the weekly YouTube Charts Top 100 songs
-and persisting them into a localized SQLite database.
-
-This script leverages Apify's dedicated YouTube Charts Scraper (websift) to 
-bypass anti-bot mitigations and IP blocking, returning exact weekly metrics.
-
-Dependencies
-------------
-- Internal: none (self-contained script).
-- External: `httpx`, `pandas`, `sqlite3` (stdlib), `asyncio`, `shutil`.
-- Downstream: Script 2.1 (Artist Metadata Enrichment) consumes the SQLite DBs.
-
-Requirements
-------------
-- Python 3.7+
-- `httpx` and `pandas` installed (auto-installed if missing).
-- Environment variable `APIFY_TOKEN` must be set.
-
-Notes
------
-- **Strict Mode**: The legacy fallback mode has been permanently removed.
-- **API Stability**: Apify ensures reliable data extraction even if YouTube
-  changes its frontend or API structure.
-- **Actor ID**: 'websift/youtube-charts-scraper' handles chart pages natively.
-
-Author: Alfonso Droguett
-Repository: https://github.com/adroguetth/youtube-music-charts-intelligence 
-Email: adroguett.consultor@gmail.com
+Hybrid approach:
+1. `ytmusicapi` to fetch the weekly Top 100 songs and video IDs.
+2. Apify's YouTube Scraper (h7sDV53CddomktSi5) to enrich the data with 
+   exact view counts.
 """
 
 import asyncio
@@ -57,15 +33,19 @@ for dir_path in [OUTPUT_DIR, ARCHIVE_DIR, DATABASE_DIR, BACKUP_DIR, DOWNLOAD_DIR
 # DEPENDENCY MANAGEMENT
 # ============================================================================
 def install_dependencies() -> bool:
-    print("🔧 Checking dependencies (httpx, pandas)...")
+    print("🔧 Checking dependencies (httpx, ytmusicapi, pandas)...")
     try:
         import httpx
+        from ytmusicapi import YTMusic
         import pandas
         print("   ✅ Dependencies are installed")
         return True
     except ImportError:
-        print("   📦 Installing httpx and pandas...")
-        subprocess.run([sys.executable, "-m", "pip", "install", "httpx", "pandas"], check=True)
+        print("   📦 Installing dependencies...")
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "httpx", "ytmusicapi", "pandas"], 
+            check=True
+        )
         print("   ✅ Dependencies installed")
         return True
 
@@ -79,74 +59,105 @@ def get_week_identifier(date: datetime = None) -> str:
     return f"{year}-W{week_num:02d}"
 
 # ============================================================================
-# YOUTUBE CHARTS DOWNLOADER (Apify API)
+# YOUTUBE CHARTS DOWNLOADER (Hybrid: ytmusicapi + Apify)
 # ============================================================================
 async def download_youtube_charts() -> Path | None:
-    print("🎵 YouTube Charts - Downloading Exact Metrics via Apify")
+    print("🎵 YouTube Charts - Downloading Exact Metrics")
     print("=" * 70)
 
     try:
         import httpx
+        from ytmusicapi import YTMusic
 
-        apify_token = os.environ.get("APIFY_TOKEN")
-        if not apify_token:
-            print("   ❌ ERROR: APIFY_TOKEN environment variable is not set.")
+        # ---------------------------------------------------------------------
+        # STEP 1: Get list of songs via ytmusicapi
+        # ---------------------------------------------------------------------
+        print("1. 📡 Fetching base playlist via ytmusicapi...")
+        yt = YTMusic()
+        charts = yt.get_charts(country="ZZ")
+        
+        playlist_id = None
+        if "videos" in charts and charts["videos"]:
+            playlist_id = charts["videos"][0].get("playlistId")
+            
+        if not playlist_id:
+            print("   ❌ No playlist found.")
             return None
 
-        print("1. 📡 Triggering Apify Actor...")
-        
-        # Using the dedicated Charts Scraper actor
-        url = f"https://api.apify.com/v2/acts/websift~youtube-charts-scraper/run-sync-get-dataset-items?token={apify_token}"
-        
-        # Payload configured for the specific charts actor
-        payload = {
-            "chartType": "top-songs",
-            "region": "global",
-            "period": "weekly",
-            "maxItems": 100
-        }
-
-        headers = {"Content-Type": "application/json"}
-
-        async with httpx.AsyncClient(timeout=180.0) as client:
-            print("   ⏳ Waiting for Apify to scrape the data...")
-            response = await client.post(url, json=payload, headers=headers)
-            
-            if response.status_code not in (200, 201):
-                print(f"   ❌ Apify API Error {response.status_code}: {response.text[:500]}")
-                # If it fails, it might be because the actor doesn't accept these keys.
-                # We fall back to a simpler payload.
-                print("   🔄 Retrying with fallback payload...")
-                payload = {"startUrls": [{"url": "https://charts.youtube.com/charts/TopSongs/global/weekly"}]}
-                response = await client.post(url, json=payload, headers=headers)
-                
-                if response.status_code not in (200, 201):
-                    print(f"   ❌ Apify API Error {response.status_code}: {response.text[:500]}")
-                    return None
-
-            data = response.json()
-            print("   ✅ Response received from Apify.")
-
-            if not data or len(data) == 0:
-                print("   ❌ Apify returned empty data.")
-                return None
-
-            # Save raw JSON for debugging
-            with open(ARCHIVE_DIR / "raw_apify_response.json", "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-
-            songs = []
-            for idx, item in enumerate(data[:100], start=1):
-                songs.append({
-                    "Rank": item.get("position", item.get("rank", idx)),
-                    "[Previous Rank]": item.get("previousPosition", "N/A"),
-                    "[Track Name]": item.get("title", ""),
-                    "[Artist Names]": item.get("artists", item.get("channelName", "")),
-                    "[Periods on Chart]": item.get("weeksOnChart", "N/A"),
-                    "Views": item.get("views", item.get("viewCount", 0)),
-                    "Growth": item.get("trend", "N/A"),
-                    "[YouTube URL]": item.get("url", ""),
+        playlist = yt.get_playlist(playlist_id, limit=100)
+        yt_tracks = []
+        for idx, track in enumerate(playlist.get("tracks", []), start=1):
+            vid = track.get("videoId")
+            if vid:
+                yt_tracks.append({
+                    "rank": idx,
+                    "video_id": vid,
+                    "title": track.get("title", ""),
+                    "artists": ", ".join([a.get("name", "") for a in track.get("artists", [])])
                 })
+        print(f"   ✅ Retrieved {len(yt_tracks)} tracks from ytmusicapi.")
+
+        # ---------------------------------------------------------------------
+        # STEP 2: Get exact views via Apify Actor
+        # ---------------------------------------------------------------------
+        print("2. 📊 Fetching exact metrics via Apify...")
+        
+        apify_token = os.environ.get("APIFY_TOKEN")
+        if not apify_token:
+            print("   ⚠️  APIFY_TOKEN not set. Skipping view count enrichment.")
+            view_data = {}
+        else:
+            # Build list of URLs to send to Apify
+            video_urls = [f"https://www.youtube.com/watch?v={t['video_id']}" for t in yt_tracks]
+            
+            # Use the Actor ID you provided
+            url = f"https://api.apify.com/v2/acts/h7sDV53CddomktSi5/run-sync-get-dataset-items?token={apify_token}"
+            
+            # The 'YouTube Scraper' accepts 'directUrls' for specific video pages
+            payload = {
+                "directUrls": video_urls,
+                "maxResults": 100
+            }
+
+            headers = {"Content-Type": "application/json"}
+            
+            async with httpx.AsyncClient(timeout=180.0) as client:
+                try:
+                    response = await client.post(url, json=payload, headers=headers)
+                    if response.status_code in (200, 201):
+                        apify_data = response.json()
+                        # Map video_id to view_count
+                        view_data = {
+                            item.get("url", "").split("v=")[-1]: item.get("viewCount", 0) 
+                            for item in apify_data if item.get("url")
+                        }
+                        print(f"   ✅ Enriched {len(view_data)} tracks with views.")
+                    else:
+                        print(f"   ⚠️  Apify Error {response.status_code}. Proceeding without view counts.")
+                        view_data = {}
+                except Exception as e:
+                    print(f"   ⚠️  Apify request failed: {e}. Proceeding without view counts.")
+                    view_data = {}
+
+        # ---------------------------------------------------------------------
+        # STEP 3: Merge Data and Save
+        # ---------------------------------------------------------------------
+        print("3. 🛠️  Merging data...")
+        songs = []
+        for track in yt_tracks:
+            vid = track["video_id"]
+            views = view_data.get(vid, 0)
+            
+            songs.append({
+                "Rank": track["rank"],
+                "[Previous Rank]": "N/A",  # Not provided by ytmusicapi or Apify
+                "[Track Name]": track["title"],
+                "[Artist Names]": track["artists"],
+                "[Periods on Chart]": "N/A", # Not provided
+                "Views": views,
+                "Growth": "N/A", # Not provided
+                "[YouTube URL]": f"https://www.youtube.com/watch?v={vid}",
+            })
 
         # Save to CSV
         filename = DOWNLOAD_DIR / "latest_chart.csv"
@@ -164,7 +175,7 @@ async def download_youtube_charts() -> Path | None:
         return filename
 
     except Exception as e:
-        print(f"⚠️  Error extracting data: {e}")
+        print(f"⚠️  Error: {e}")
         import traceback
         traceback.print_exc()
         return None
@@ -281,7 +292,7 @@ def cleanup_old_databases(weeks: int = 52) -> None:
 # ============================================================================
 def main() -> int:
     print("\n" + "=" * 70)
-    print("🎵 YOUTUBE CHARTS - EXTRACTOR (No Fallback)")
+    print("🎵 YOUTUBE CHARTS - HYBRID EXTRACTOR (No Fallback)")
     print("=" * 70)
 
     if not install_dependencies():
@@ -290,7 +301,7 @@ def main() -> int:
     week_id = get_week_identifier()
     print(f"\n📆 Current week: {week_id}")
 
-    print("\n1. 📥 DOWNLOADING YOUTUBE CHARTS (Apify)...")
+    print("\n1. 📥 DOWNLOADING YOUTUBE CHARTS...")
     csv_path = asyncio.run(download_youtube_charts())
 
     if not csv_path or not csv_path.exists():
