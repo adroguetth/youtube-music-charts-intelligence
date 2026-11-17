@@ -2,8 +2,10 @@ name: 1- Download YouTube Chart
 
 on:
   schedule:
+    # Runs every Monday at 12:00 UTC
     - cron: '0 12 * * 1'
   
+  # Allows manual triggering from the GitHub Actions UI
   workflow_dispatch:
 
 env:
@@ -13,7 +15,11 @@ jobs:
   download-and-store:
     name: Download and Store YouTube Charts
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    
+    # Reduced timeout from 30m to 15m. 
+    # Since we transitioned from Playwright (browser automation) to ytmusicapi (direct HTTP),
+    # the execution time is now ~5 seconds. 15m provides a safe buffer for network latency.
+    timeout-minutes: 15
     
     permissions:
       contents: write
@@ -22,28 +28,41 @@ jobs:
     - name: 📚 Checkout repository
       uses: actions/checkout@v4
       with:
+        # Fetch full history to allow git rebase/pull operations in the commit step
         fetch-depth: 0
     
     - name: 🐍 Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: "3.12"
+        # Enable pip caching to speed up subsequent workflow runs
         cache: 'pip'
     
     - name: 📦 Install dependencies
       run: |
-        pip install -r requirements.txt
-        python -m playwright install chromium
-        python -m playwright install-deps
+        python -m pip install --upgrade pip
+        # NOTE: We no longer install Playwright or Chromium browsers.
+        # The extraction logic now relies entirely on 'ytmusicapi' and 'pandas'.
+        # This drastically reduces workflow execution time and resource consumption.
+        pip install ytmusicapi pandas
     
     - name: 📁 Create directory structure
       run: |
-        mkdir -p data charts_archive/1_download-chart/databases charts_archive/1_download-chart/backup
+        # Ensure all required directories exist before the script runs.
+        # - data/: General output directory
+        # - databases/: Weekly SQLite files (versioned by YYYY-WXX)
+        # - backup/: Retention-managed backups of previous databases
+        # - downloads/: Raw CSV output from the API
+        mkdir -p data \
+          charts_archive/1_download-chart/databases \
+          charts_archive/1_download-chart/backup \
+          charts_archive/1_download-chart/downloads
     
     - name: 🚀 Run download script
       run: |
         python scripts/1_download.py
       env:
+        # Injects a flag to allow the script to detect it's running in a CI/CD environment
         GITHUB_ACTIONS: true
     
     - name: ✅ Verify results
@@ -60,7 +79,8 @@ jobs:
         ls -lah charts_archive/1_download-chart/backup/*.db 2>/dev/null || echo "No backups found"
         
         echo -e "\n📊 Latest CSV:"
-        ls -lah charts_archive/1_download-chart/latest_chart.csv 2>/dev/null || echo "No CSV found"
+        # Updated path to match the DOWNLOAD_DIR constant in the new script
+        ls -lah charts_archive/1_download-chart/downloads/latest_chart.csv 2>/dev/null || echo "No CSV found"
         
         echo -e "\n📈 File statistics:"
         find charts_archive/1_download-chart -type f -exec ls -lh {} \; | awk '{print $5, $9}'
@@ -69,11 +89,14 @@ jobs:
       run: |
         echo "📝 Preparing commit..."
         
+        # Configure git identity for the automated commit
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
         
+        # Stage only the archive directory to avoid committing unrelated changes
         git add charts_archive/
         
+        # Check if there are staged changes; if not, skip commit to avoid empty commits
         if git diff --cached --quiet; then
           echo "🔭 No changes to commit"
         else
@@ -81,6 +104,7 @@ jobs:
           WEEK=$(date +'%Y-W%W')
           git commit -m "🤖 YouTube Chart Update ${DATE} (Week ${WEEK}) [Automated]"
           
+          # Rebase to incorporate any upstream changes before pushing
           echo "⬇️ Pulling latest changes with rebase..."
           git pull --rebase origin main
           
@@ -90,6 +114,7 @@ jobs:
         fi
     
     - name: 📦 Upload artifacts (on failure)
+      # Only upload artifacts if the job fails, to aid in debugging
       if: failure()
       uses: actions/upload-artifact@v4
       with:
@@ -110,6 +135,7 @@ jobs:
         echo "🔗 Commit: ${{ github.sha }}"
         echo ""
         
+        # Calculate current ISO week (YYYY-WXX) to verify database existence
         WEEK_ID=$(python3 -c "from datetime import datetime; y,w,_ = datetime.now().isocalendar(); print(f'{y}-W{w:02d}')")
         DB_FILE="charts_archive/1_download-chart/databases/youtube_charts_${WEEK_ID}.db"
         
@@ -121,18 +147,20 @@ jobs:
           echo "⚠️ Weekly database not found"
         fi
         
-        if [ -f "charts_archive/1_download-chart/latest_chart.csv" ]; then
+        if [ -f "charts_archive/1_download-chart/downloads/latest_chart.csv" ]; then
           echo "✅ Latest CSV updated"
-          LATEST_SIZE=$(stat -c%s "charts_archive/1_download-chart/latest_chart.csv")
+          LATEST_SIZE=$(stat -c%s "charts_archive/1_download-chart/downloads/latest_chart.csv")
           echo "📊 Size: $((LATEST_SIZE / 1024)) KB"
         fi
         
+        # Count historical databases to verify retention policy is working
         TOTAL_DBS=$(find charts_archive/1_download-chart/databases -name "youtube_charts_*.db" 2>/dev/null | wc -l)
         if [ "$TOTAL_DBS" -gt 0 ]; then
           echo ""
           echo "📦 Total historical databases: $TOTAL_DBS"
         fi
         
+        # Count backups to verify the backup retention policy
         TOTAL_BACKUPS=$(find charts_archive/1_download-chart/backup -name "backup_*.db" 2>/dev/null | wc -l)
         if [ "$TOTAL_BACKUPS" -gt 0 ]; then
           echo "💾 Total available backups: $TOTAL_BACKUPS"
