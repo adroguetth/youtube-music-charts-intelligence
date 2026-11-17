@@ -236,79 +236,135 @@ async def download_youtube_charts() -> Path | None:
 # ============================================================================
 # SQLITE PERSISTENCE
 # ============================================================================
-def update_sqlite_database(csv_path: Path, week_id: str) -> Path | None:
-    print("   📊 Processing chart data into SQLite...")
+async def download_youtube_charts() -> Path | None:
+    print("🎵 YouTube Charts - Downloading Exact Metrics")
+    print("=" * 70)
+
     try:
-        import sqlite3
+        from ytmusicapi import YTMusic
         import pandas as pd
+        import json
 
-        df = pd.read_csv(csv_path, encoding="utf-8")
+        print("1. 📡 Connecting to YouTube Music API...")
+        yt = YTMusic()
+
+        print("2. 📊 Fetching global weekly charts...")
+        charts = yt.get_charts(country="ZZ")
+
+        # Save raw JSON for debugging
+        raw_debug_path = ARCHIVE_DIR / "raw_ytmusicapi_response.json"
+        with open(raw_debug_path, "w", encoding="utf-8") as f:
+            json.dump(charts, f, indent=2)
+        print(f"   📄 Raw JSON saved to: {raw_debug_path}")
+
+        # Extract the playlist ID for Top Songs
+        playlist_id = None
+        if "videos" in charts and charts["videos"]:
+            playlist_id = charts["videos"][0].get("playlistId")
+            print(f"   🎯 Playlist ID found: {playlist_id}")
         
-        current_time = datetime.now()
-        df["download_date"] = current_time.strftime("%Y-%m-%d")
-        df["download_time"] = current_time.strftime("%H:%M:%S")
-        df["week_id"] = week_id
-        df["timestamp"] = current_time.strftime("%Y%m%d_%H%M%S")
+        if not playlist_id:
+            print("   ❌ No playlist found in charts response.")
+            return None
 
-        columns_order = [
+        print("3. 📥 Fetching detailed chart data...")
+        # Instead of get_playlist, we need to use the raw JSON from get_charts.
+        # The get_charts function returns a list of playlists, but the actual tracks
+        # might be embedded in the JSON. Let's search for the tracks directly.
+        
+        songs = []
+        
+        # Recursive search for chart entries in the JSON
+        def extract_tracks(obj):
+            if isinstance(obj, dict):
+                # Look for objects that have 'chartEntryData' and 'trackMetadata'
+                if "chartEntryData" in obj and "trackMetadata" in obj:
+                    entry = obj["chartEntryData"]
+                    meta = obj["trackMetadata"]
+                    
+                    video_id = meta.get("videoId", "")
+                    youtube_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else ""
+                    
+                    # Extract metrics
+                    current_rank = entry.get("currentRank", 0)
+                    previous_rank = entry.get("previousRank", "N/A")
+                    periods = entry.get("appearancesOnChart", "N/A")
+                    
+                    ranking_metric = entry.get("rankingMetric", {})
+                    views_str = ranking_metric.get("value", "0")
+                    growth = ranking_metric.get("change", "N/A")
+                    
+                    views_clean = int(''.join(filter(str.isdigit, str(views_str)))) if views_str else 0
+
+                    songs.append({
+                        "Rank": current_rank,
+                        "[Previous Rank]": previous_rank,
+                        "[Track Name]": meta.get("trackName", ""),
+                        "[Artist Names]": ", ".join([a.get("name", "") for a in meta.get("artists", [])]),
+                        "[Periods on Chart]": periods,
+                        "Views": views_clean,
+                        "Growth": growth,
+                        "[YouTube URL]": youtube_url,
+                    })
+                    return
+                
+                for value in obj.values():
+                    extract_tracks(value)
+            elif isinstance(obj, list):
+                for item in obj:
+                    extract_tracks(item)
+
+        extract_tracks(charts)
+
+        # If no tracks found via chartEntryData, fall back to get_playlist
+        if not songs:
+            print("   ⚠️  No chartEntryData found in get_charts response. Falling back to get_playlist...")
+            playlist = yt.get_playlist(playlist_id, limit=100)
+            
+            for idx, track in enumerate(playlist.get("tracks", []), start=1):
+                video_id = track.get("videoId", "")
+                youtube_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else ""
+                
+                songs.append({
+                    "Rank": idx,
+                    "[Previous Rank]": "N/A",
+                    "[Track Name]": track.get("title", ""),
+                    "[Artist Names]": ", ".join([a.get("name", "") for a in track.get("artists", [])]),
+                    "[Periods on Chart]": "N/A",
+                    "Views": 0,
+                    "Growth": "N/A",
+                    "[YouTube URL]": youtube_url,
+                })
+
+        if not songs:
+            print("   ❌ No tracks found.")
+            return None
+
+        # Sort by Rank
+        songs.sort(key=lambda x: x["Rank"])
+        songs = songs[:100]
+        
+        print(f"   ✅ Extracted {len(songs)} tracks with metrics.")
+
+        # Save to CSV
+        filename = DOWNLOAD_DIR / "latest_chart.csv"
+        fieldnames = [
             "Rank", "[Previous Rank]", "[Track Name]", "[Artist Names]",
-            "[Periods on Chart]", "Views", "Growth", "[YouTube URL]",
-            "download_date", "download_time", "week_id", "timestamp"
+            "[Periods on Chart]", "Views", "Growth", "[YouTube URL]"
         ]
-        df = df[columns_order]
-
-        db_path = DATABASE_DIR / f"youtube_charts_{week_id}.db"
-        if db_path.exists(): 
-            create_backup_before_update(week_id)
-
-        conn = sqlite3.connect(db_path)
-        temp_table_name = f"temp_{current_time.strftime('%Y%m%d_%H%M%S')}"
         
-        cursor = conn.cursor()
-        cursor.execute(f"""
-            CREATE TABLE {temp_table_name} (
-                Rank               INTEGER,
-                [Previous Rank]    REAL,
-                [Track Name]       TEXT,
-                [Artist Names]     TEXT,
-                [Periods on Chart] INTEGER,
-                Views              INTEGER,
-                Growth             TEXT,
-                [YouTube URL]      TEXT,
-                download_date      TEXT,
-                download_time      TEXT,
-                week_id            TEXT,
-                timestamp          TEXT
-            )
-        """)
-        
-        for _, row in df.iterrows():
-            cursor.execute(f"""
-                INSERT INTO {temp_table_name} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, tuple(row))
+        with open(filename, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(songs)
 
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chart_data'")
-        
-        if cursor.fetchone():
-            cursor.execute("PRAGMA table_info(chart_data)")
-            existing_cols = len(cursor.fetchall())
-            if existing_cols != 12:
-                cursor.execute("DROP TABLE chart_data")
-                cursor.execute(f"ALTER TABLE {temp_table_name} RENAME TO chart_data")
-            else:
-                cursor.execute("DELETE FROM chart_data WHERE week_id = ?", (week_id,))
-                cursor.execute(f"INSERT INTO chart_data SELECT * FROM {temp_table_name}")
-                cursor.execute(f"DROP TABLE {temp_table_name}")
-        else:
-            cursor.execute(f"ALTER TABLE {temp_table_name} RENAME TO chart_data")
+        print(f"   💾 CSV saved: {filename} ({filename.stat().st_size} bytes)")
+        return filename
 
-        conn.commit()
-        conn.close()
-        print(f"   ✅ Database updated: {db_path}")
-        return db_path
-        
     except Exception as e:
-        print(f"⚠️  SQLite error: {e}")
+        print(f"⚠️  Error: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 # ============================================================================
