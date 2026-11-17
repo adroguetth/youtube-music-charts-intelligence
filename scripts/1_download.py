@@ -5,27 +5,28 @@ Top-level entry point for downloading the weekly YouTube Charts Top 100 songs
 and persisting them into a localized SQLite database. This module acts as the
 first stage in the broader intelligence pipeline.
 
-This script uses a robust hybrid approach:
-1. `ytmusicapi` to fetch the base playlist and video IDs reliably.
-2. `yt-dlp` to extract exact view counts and video metadata for each track,
-   bypassing the blocked charts.youtube.com API.
+This script leverages Apify's YouTube Charts Scraper to bypass anti-bot 
+mitigations and IP blocking. Apify handles proxy rotation and CAPTCHA 
+solving internally, returning a clean JSON payload with exact metrics 
+(Views, Growth, Previous Rank, Periods on Chart).
 
 Dependencies
 ------------
 - Internal: none (self-contained script).
-- External: `ytmusicapi`, `yt-dlp`, `pandas`, `sqlite3` (stdlib).
+- External: `httpx`, `pandas`, `sqlite3` (stdlib), `asyncio`, `shutil`.
 - Downstream: Script 2.1 (Artist Metadata Enrichment) consumes the SQLite DBs.
 
 Requirements
 ------------
 - Python 3.7+
-- `ytmusicapi`, `yt-dlp`, and `pandas` installed (auto-installed if missing).
+- `httpx` and `pandas` installed (auto-installed if missing).
+- Environment variable `APIFY_TOKEN` must be set.
 
 Notes
 -----
-- **Strict Mode**: The legacy fallback mode has been removed.
-- **API Stability**: `yt-dlp` handles YouTube's dynamic API changes automatically.
-- **Performance**: Fetching metadata for 100 videos takes ~1-2 minutes.
+- **Strict Mode**: The legacy fallback mode has been permanently removed.
+- **API Stability**: Apify ensures reliable data extraction even if YouTube
+  changes its frontend or API structure.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence 
@@ -51,6 +52,7 @@ DATABASE_DIR = ARCHIVE_DIR / "databases"
 BACKUP_DIR = ARCHIVE_DIR / "backup"
 DOWNLOAD_DIR = ARCHIVE_DIR / "downloads"
 
+# Ensure all required directories exist before any file operations.
 for dir_path in [OUTPUT_DIR, ARCHIVE_DIR, DATABASE_DIR, BACKUP_DIR, DOWNLOAD_DIR]:
     dir_path.mkdir(parents=True, exist_ok=True)
 
@@ -58,17 +60,19 @@ for dir_path in [OUTPUT_DIR, ARCHIVE_DIR, DATABASE_DIR, BACKUP_DIR, DOWNLOAD_DIR
 # DEPENDENCY MANAGEMENT
 # ============================================================================
 def install_dependencies() -> bool:
-    print("🔧 Checking dependencies (ytmusicapi, yt-dlp, pandas)...")
+    """
+    Check and install required external dependencies if needed.
+    """
+    print("🔧 Checking dependencies (httpx, pandas)...")
     try:
-        from ytmusicapi import YTMusic
-        import yt_dlp
+        import httpx
         import pandas
         print("   ✅ Dependencies are installed")
         return True
     except ImportError:
-        print("   📦 Installing dependencies...")
+        print("   📦 Installing httpx and pandas...")
         subprocess.run(
-            [sys.executable, "-m", "pip", "install", "ytmusicapi", "yt-dlp", "pandas"], 
+            [sys.executable, "-m", "pip", "install", "httpx", "pandas"], 
             check=True
         )
         print("   ✅ Dependencies installed")
@@ -78,117 +82,92 @@ def install_dependencies() -> bool:
 # WEEK IDENTIFIER
 # ============================================================================
 def get_week_identifier(date: datetime = None) -> str:
+    """
+    Generate ISO week identifier string (e.g., '2026-W47').
+    """
     if date is None:
         date = datetime.now()
     year, week_num, _ = date.isocalendar()
     return f"{year}-W{week_num:02d}"
 
 # ============================================================================
-# YOUTUBE CHARTS DOWNLOADER (ytmusicapi + yt-dlp)
+# YOUTUBE CHARTS DOWNLOADER (Apify API)
 # ============================================================================
 async def download_youtube_charts() -> Path | None:
-    print("🎵 YouTube Charts - Downloading Exact Metrics")
+    """
+    Download YouTube Charts data using the Apify API.
+    
+    Returns:
+        Path | None: The path to the generated CSV file if successful, 
+                     None otherwise.
+    """
+    print("🎵 YouTube Charts - Downloading Exact Metrics via Apify")
     print("=" * 70)
 
     try:
-        from ytmusicapi import YTMusic
-        import yt_dlp
-        import pandas as pd
+        import httpx
 
-        # ---------------------------------------------------------------------
-        # STEP 1: Use ytmusicapi to get the reliable list of video IDs
-        # ---------------------------------------------------------------------
-        print("1. 📡 Fetching base playlist via ytmusicapi...")
-        yt = YTMusic()
-        charts = yt.get_charts(country="ZZ")
-        
-        playlist_id = None
-        if "videos" in charts and charts["videos"]:
-            playlist_id = charts["videos"][0].get("playlistId")
-            
-        if not playlist_id:
-            print("   ❌ No playlist found in ytmusicapi response.")
+        # Retrieve the API token from environment variables
+        apify_token = os.environ.get("APIFY_TOKEN")
+        if not apify_token:
+            print("   ❌ ERROR: APIFY_TOKEN environment variable is not set.")
+            print("   Please configure it in your environment or GitHub Secrets.")
             return None
 
-        playlist = yt.get_playlist(playlist_id, limit=100)
-        yt_tracks = []
-        for idx, track in enumerate(playlist.get("tracks", []), start=1):
-            vid = track.get("videoId")
-            if vid:
-                yt_tracks.append({
-                    "rank": idx,
-                    "video_id": vid,
-                    "title": track.get("title", ""),
-                    "artists": ", ".join([a.get("name", "") for a in track.get("artists", [])])
-                })
-        print(f"   ✅ ytmusicapi retrieved {len(yt_tracks)} tracks.")
-
-        # ---------------------------------------------------------------------
-        # STEP 2: Use yt-dlp to get exact views and metadata for each video
-        # ---------------------------------------------------------------------
-        print("2. 📊 Fetching exact metrics via yt-dlp (this may take a minute)...")
+        print("1. 📡 Triggering Apify Actor...")
         
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'extract_flat': False,
-            'skip_download': True,
+        # Apify actor endpoint (websift/youtube-charts-scraper)
+        # We use 'run-sync-get-dataset-items' to execute and get results in one step.
+        url = f"https://api.apify.com/v2/acts/websift~youtube-charts-scraper/run-sync-get-dataset-items?token={apify_token}"
+        
+        # Payload configuration for Global Top Songs Weekly
+        payload = {
+            "charts": ["top-songs"],
+            "regions": ["global"],
+            "periods": ["weekly"],
+            "maxItems": 100
         }
 
-        songs = []
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            for idx, track in enumerate(yt_tracks, start=1):
-                vid = track["video_id"]
-                url = f"https://www.youtube.com/watch?v={vid}"
-                
-                try:
-                    # Extract metadata without downloading the video
-                    info = ydl.extract_info(url, download=False)
-                    
-                    views = info.get("view_count", 0)
-                    # Growth and Previous Rank are not available via yt-dlp
-                    # We set them to N/A as they require historical context
-                    growth = "N/A"
-                    prev_rank = "N/A"
-                    periods = "N/A"
-                    
-                    songs.append({
-                        "Rank": track["rank"],
-                        "[Previous Rank]": prev_rank,
-                        "[Track Name]": track["title"],
-                        "[Artist Names]": track["artists"],
-                        "[Periods on Chart]": periods,
-                        "Views": views,
-                        "Growth": growth,
-                        "[YouTube URL]": url,
-                    })
-                    
-                    if idx % 10 == 0:
-                        print(f"   ⏳ Processed {idx}/100 videos...")
-                        
-                except Exception as e:
-                    print(f"   ⚠️  Failed to extract {vid}: {e}")
-                    # Still add the track with default values
-                    songs.append({
-                        "Rank": track["rank"],
-                        "[Previous Rank]": "N/A",
-                        "[Track Name]": track["title"],
-                        "[Artist Names]": track["artists"],
-                        "[Periods on Chart]": "N/A",
-                        "Views": 0,
-                        "Growth": "N/A",
-                        "[YouTube URL]": url,
-                    })
+        headers = {
+            "Content-Type": "application/json"
+        }
 
-        if not songs:
-            print("   ❌ No tracks found.")
-            return None
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(url, json=payload, headers=headers)
+            
+            if response.status_code not in (200, 201):
+                print(f"   ❌ Apify API Error {response.status_code}: {response.text[:500]}")
+                return None
 
-        print(f"   ✅ Extracted {len(songs)} tracks with view counts.")
+            data = response.json()
+            print("   ✅ Response received from Apify.")
 
-        # ---------------------------------------------------------------------
-        # STEP 3: Save to CSV
-        # ---------------------------------------------------------------------
+            if not data:
+                print("   ❌ Apify returned empty data.")
+                return None
+
+            # Map Apify's JSON response to our exact database schema.
+            # Apify provides clean fields, so we map them directly.
+            songs = []
+            for idx, item in enumerate(data[:100], start=1):
+                songs.append({
+                    "Rank": item.get("position", idx),
+                    "[Previous Rank]": item.get("previousPosition", "N/A"),
+                    "[Track Name]": item.get("title", ""),
+                    "[Artist Names]": item.get("artists", ""),
+                    "[Periods on Chart]": item.get("weeksOnChart", "N/A"),
+                    "Views": item.get("views", 0),
+                    "Growth": item.get("trend", "N/A"),
+                    "[YouTube URL]": item.get("url", ""),
+                })
+
+            # Save raw JSON for auditing and debugging purposes.
+            raw_debug_path = ARCHIVE_DIR / "raw_apify_response.json"
+            with open(raw_debug_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            print(f"   📄 Raw JSON saved to: {raw_debug_path}")
+
+        # Serialize mapped data to CSV
         filename = DOWNLOAD_DIR / "latest_chart.csv"
         fieldnames = [
             "Rank", "[Previous Rank]", "[Track Name]", "[Artist Names]",
@@ -204,7 +183,7 @@ async def download_youtube_charts() -> Path | None:
         return filename
 
     except Exception as e:
-        print(f"⚠️  Error: {e}")
+        print(f"⚠️  Error extracting data: {e}")
         import traceback
         traceback.print_exc()
         return None
@@ -213,6 +192,13 @@ async def download_youtube_charts() -> Path | None:
 # SQLITE PERSISTENCE
 # ============================================================================
 def update_sqlite_database(csv_path: Path, week_id: str) -> Path | None:
+    """
+    Update the SQLite database with the new chart data.
+    
+    Implements an atomic update strategy: inserts data into a temp table,
+    then replaces the target table/rows within a transaction. Includes schema
+    validation to handle structural changes gracefully.
+    """
     print("   📊 Processing chart data into SQLite...")
     try:
         import sqlite3
@@ -220,12 +206,14 @@ def update_sqlite_database(csv_path: Path, week_id: str) -> Path | None:
 
         df = pd.read_csv(csv_path, encoding="utf-8")
         
+        # Enrich dataframe with metadata columns for historical tracking.
         current_time = datetime.now()
         df["download_date"] = current_time.strftime("%Y-%m-%d")
         df["download_time"] = current_time.strftime("%H:%M:%S")
         df["week_id"] = week_id
         df["timestamp"] = current_time.strftime("%Y%m%d_%H%M%S")
 
+        # Enforce exact column order for the database schema.
         columns_order = [
             "Rank", "[Previous Rank]", "[Track Name]", "[Artist Names]",
             "[Periods on Chart]", "Views", "Growth", "[YouTube URL]",
@@ -240,6 +228,7 @@ def update_sqlite_database(csv_path: Path, week_id: str) -> Path | None:
         conn = sqlite3.connect(db_path)
         temp_table_name = f"temp_{current_time.strftime('%Y%m%d_%H%M%S')}"
         
+        # Create the temporary table with explicit type definitions.
         cursor = conn.cursor()
         cursor.execute(f"""
             CREATE TABLE {temp_table_name} (
@@ -258,28 +247,36 @@ def update_sqlite_database(csv_path: Path, week_id: str) -> Path | None:
             )
         """)
         
+        # Insert data row by row.
         for _, row in df.iterrows():
             cursor.execute(f"""
                 INSERT INTO {temp_table_name} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, tuple(row))
 
+        # Handle the main table (chart_data).
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chart_data'")
         
         if cursor.fetchone():
+            # Validate schema: if column count differs, drop and recreate.
             cursor.execute("PRAGMA table_info(chart_data)")
             existing_cols = len(cursor.fetchall())
+            
             if existing_cols != 12:
+                print(f"   ⚠️  Schema mismatch: existing table has {existing_cols} columns. Rebuilding...")
                 cursor.execute("DROP TABLE chart_data")
                 cursor.execute(f"ALTER TABLE {temp_table_name} RENAME TO chart_data")
             else:
+                # Schema matches: delete old records for this week and insert new ones.
                 cursor.execute("DELETE FROM chart_data WHERE week_id = ?", (week_id,))
                 cursor.execute(f"INSERT INTO chart_data SELECT * FROM {temp_table_name}")
                 cursor.execute(f"DROP TABLE {temp_table_name}")
         else:
+            # Table doesn't exist: promote the temp table.
             cursor.execute(f"ALTER TABLE {temp_table_name} RENAME TO chart_data")
 
         conn.commit()
         conn.close()
+        
         print(f"   ✅ Database updated: {db_path}")
         return db_path
         
@@ -288,53 +285,97 @@ def update_sqlite_database(csv_path: Path, week_id: str) -> Path | None:
         return None
 
 # ============================================================================
-# BACKUP & CLEANUP
+# BACKUP & CLEANUP FUNCTIONS
 # ============================================================================
 def create_backup_before_update(week_id: str) -> None:
+    """
+    Create a timestamped backup of the existing SQLite database.
+    """
     db_path = DATABASE_DIR / f"youtube_charts_{week_id}.db"
-    if not db_path.exists(): return
+    if not db_path.exists(): 
+        return
+    
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = BACKUP_DIR / f"backup_{week_id}_{timestamp}.db"
-    shutil.copy2(db_path, backup_path)
-    print(f"   ✅ Backup created: {backup_path.name}")
+    
+    try:
+        shutil.copy2(db_path, backup_path)
+        print(f"   ✅ Backup created: {backup_path.name}")
+    except Exception as e:
+        print(f"   ⚠️  Error creating backup: {e}")
 
 def cleanup_old_backups(days: int = 7) -> None:
+    """
+    Remove backup files older than the specified retention period.
+    """
+    print(f"   🧹 Cleaning backups older than {days} days...")
     cutoff_date = datetime.now() - timedelta(days=days)
+    deleted_count = 0
+    
     for backup in BACKUP_DIR.glob("backup_*.db"):
         if backup.stat().st_mtime < cutoff_date.timestamp():
-            backup.unlink()
+            try:
+                backup.unlink()
+                deleted_count += 1
+            except Exception as e:
+                print(f"   ⚠️  Error deleting {backup.name}: {e}")
+                
+    if deleted_count > 0:
+        print(f"   ✅ Deleted {deleted_count} old backup(s)")
+    else:
+        print("   ℹ️  No old backups to delete")
 
 def cleanup_old_databases(weeks: int = 52) -> None:
+    """
+    Remove database files older than the specified retention period.
+    """
+    print(f"   🧹 Cleaning databases older than {weeks} weeks...")
     cutoff_date = datetime.now() - timedelta(weeks=weeks)
+    deleted_count = 0
+    
     for db in DATABASE_DIR.glob("youtube_charts_*.db"):
         try:
             week_id = db.stem.replace("youtube_charts_", "")
             year, week = map(int, week_id.split("-W"))
             db_date = datetime.strptime(f"{year}-W{week:02d}-1", "%Y-W%W-%w")
+            
             if db_date < cutoff_date:
                 db.unlink()
-        except Exception:
-            pass
+                deleted_count += 1
+                print(f"      ✅ Deleted: {db.name}")
+        except Exception as e:
+            print(f"   ⚠️  Error processing {db.name}: {e}")
+            
+    if deleted_count > 0:
+        print(f"   ✅ Deleted {deleted_count} old database(s)")
+    else:
+        print("   ℹ️  No old databases to delete")
 
 # ============================================================================
-# MAIN
+# MAIN ORCHESTRATION
 # ============================================================================
 def main() -> int:
+    """
+    Entry point for the download and persistence pipeline.
+    """
     print("\n" + "=" * 70)
-    print("🎵 YOUTUBE CHARTS - YT-DLP EXTRACTOR (No Fallback)")
+    print("🎵 YOUTUBE CHARTS - EXTRACTOR (No Fallback)")
     print("=" * 70)
 
     if not install_dependencies():
+        print("❌ CRITICAL: Dependency installation failed. Aborting.")
         return 1
 
     week_id = get_week_identifier()
     print(f"\n📆 Current week: {week_id}")
 
-    print("\n1. 📥 DOWNLOADING YOUTUBE CHARTS...")
+    print("\n1. 📥 DOWNLOADING YOUTUBE CHARTS (Apify)...")
     csv_path = asyncio.run(download_youtube_charts())
 
+    # Strict mode: Abort if download fails.
     if not csv_path or not csv_path.exists():
         print("\n❌ CRITICAL ERROR: Automatic download failed.")
+        print("🛑 Fallback mode disabled. Aborting execution to prevent data pollution.")
         return 1
 
     print("\n2. 🗃️  STORING IN SQLITE DATABASE...")
@@ -353,5 +394,8 @@ def main() -> int:
     print("=" * 70)
     return 0
 
+# ============================================================================
+# ENTRY POINT
+# ============================================================================
 if __name__ == "__main__":
     sys.exit(main())
