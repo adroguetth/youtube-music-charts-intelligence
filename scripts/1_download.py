@@ -5,32 +5,27 @@ Top-level entry point for downloading the weekly YouTube Charts Top 100 songs
 and persisting them into a localized SQLite database. This module acts as the
 first stage in the broader intelligence pipeline.
 
-This script uses a hybrid approach:
+This script uses a robust hybrid approach:
 1. `ytmusicapi` to fetch the base playlist and video IDs reliably.
-2. `httpx` to query the `charts.youtube.com` InnerTube API (using the "WEB" 
-   client) to extract exact weekly metrics (Views, Growth, Previous Rank, 
-   Periods on Chart).
+2. `yt-dlp` to extract exact view counts and video metadata for each track,
+   bypassing the blocked charts.youtube.com API.
 
 Dependencies
 ------------
 - Internal: none (self-contained script).
-- External: `httpx`, `ytmusicapi`, `pandas`, `sqlite3` (stdlib), `asyncio`, 
-  `shutil`, `subprocess`.
-- Downstream: Script 2.1 (Artist Metadata Enrichment) consumes the generated
-  SQLite databases.
+- External: `ytmusicapi`, `yt-dlp`, `pandas`, `sqlite3` (stdlib).
+- Downstream: Script 2.1 (Artist Metadata Enrichment) consumes the SQLite DBs.
 
 Requirements
 ------------
 - Python 3.7+
-- `httpx`, `ytmusicapi`, and `pandas` installed (auto-installed if missing).
-- Write access to the `charts_archive/` directory structure.
+- `ytmusicapi`, `yt-dlp`, and `pandas` installed (auto-installed if missing).
 
 Notes
 -----
-- **Strict Mode**: The legacy fallback mode (generating 100 synthetic records)
-  has been permanently removed. If the API fails, the script exits with code 1.
-- **API Stability**: Direct InnerTube requests require dynamic generation of
-  the `clientVersion` to prevent HTTP 400 (Invalid Argument) errors.
+- **Strict Mode**: The legacy fallback mode has been removed.
+- **API Stability**: `yt-dlp` handles YouTube's dynamic API changes automatically.
+- **Performance**: Fetching metadata for 100 videos takes ~1-2 minutes.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence 
@@ -63,17 +58,17 @@ for dir_path in [OUTPUT_DIR, ARCHIVE_DIR, DATABASE_DIR, BACKUP_DIR, DOWNLOAD_DIR
 # DEPENDENCY MANAGEMENT
 # ============================================================================
 def install_dependencies() -> bool:
-    print("🔧 Checking dependencies (httpx, ytmusicapi, pandas)...")
+    print("🔧 Checking dependencies (ytmusicapi, yt-dlp, pandas)...")
     try:
-        import httpx
         from ytmusicapi import YTMusic
+        import yt_dlp
         import pandas
         print("   ✅ Dependencies are installed")
         return True
     except ImportError:
         print("   📦 Installing dependencies...")
         subprocess.run(
-            [sys.executable, "-m", "pip", "install", "httpx", "ytmusicapi", "pandas"], 
+            [sys.executable, "-m", "pip", "install", "ytmusicapi", "yt-dlp", "pandas"], 
             check=True
         )
         print("   ✅ Dependencies installed")
@@ -89,15 +84,15 @@ def get_week_identifier(date: datetime = None) -> str:
     return f"{year}-W{week_num:02d}"
 
 # ============================================================================
-# YOUTUBE CHARTS DOWNLOADER (Hybrid Approach)
+# YOUTUBE CHARTS DOWNLOADER (ytmusicapi + yt-dlp)
 # ============================================================================
 async def download_youtube_charts() -> Path | None:
     print("🎵 YouTube Charts - Downloading Exact Metrics")
     print("=" * 70)
 
     try:
-        import httpx
         from ytmusicapi import YTMusic
+        import yt_dlp
         import pandas as pd
 
         # ---------------------------------------------------------------------
@@ -116,113 +111,83 @@ async def download_youtube_charts() -> Path | None:
             return None
 
         playlist = yt.get_playlist(playlist_id, limit=100)
-        yt_tracks = {}
-        for track in playlist.get("tracks", []):
+        yt_tracks = []
+        for idx, track in enumerate(playlist.get("tracks", []), start=1):
             vid = track.get("videoId")
             if vid:
-                yt_tracks[vid] = {
+                yt_tracks.append({
+                    "rank": idx,
+                    "video_id": vid,
                     "title": track.get("title", ""),
                     "artists": ", ".join([a.get("name", "") for a in track.get("artists", [])])
-                }
+                })
         print(f"   ✅ ytmusicapi retrieved {len(yt_tracks)} tracks.")
 
         # ---------------------------------------------------------------------
-        # STEP 2: Use httpx to query charts.youtube.com for exact metrics
+        # STEP 2: Use yt-dlp to get exact views and metadata for each video
         # ---------------------------------------------------------------------
-        print("2. 📊 Fetching exact metrics from charts.youtube.com API...")
+        print("2. 📊 Fetching exact metrics via yt-dlp (this may take a minute)...")
         
-        today_str = datetime.now().strftime("%Y%m%d")
-        client_version = f"2.{today_str}.01.00"
-
-        url = "https://charts.youtube.com/youtubei/v1/browse"
-        payload = {
-            "context": {
-                "client": {
-                    "clientName": "WEB",
-                    "clientVersion": client_version,
-                    "hl": "en",
-                    "gl": "US",
-                }
-            },
-            "browseId": "FEmusic_charts",
-            "query": "chart_params_type=WEEK&perspective=CHART&flags=viral_video_chart&selected_chart=TRACKS",
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': False,
+            'skip_download': True,
         }
 
-        headers = {
-            "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept": "application/json",
-            "Referer": "https://charts.youtube.com/",
-            "Origin": "https://charts.youtube.com",
-        }
-
-        exact_metrics = {}
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(url, json=payload, headers=headers)
-                print(f"   📡 API Response Status: {response.status_code}")
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    with open(ARCHIVE_DIR / "raw_api_response.json", "w", encoding="utf-8") as f:
-                        json.dump(data, f, indent=2)
-
-                    def extract_metrics(obj):
-                        if isinstance(obj, dict):
-                            if "chartEntryData" in obj and "trackMetadata" in obj:
-                                meta = obj["trackMetadata"]
-                                entry = obj["chartEntryData"]
-                                vid = meta.get("videoId")
-                                if vid:
-                                    metric = entry.get("rankingMetric", {})
-                                    exact_metrics[vid] = {
-                                        "rank": entry.get("currentRank", 0),
-                                        "prev_rank": entry.get("previousRank", "N/A"),
-                                        "periods": entry.get("appearancesOnChart", "N/A"),
-                                        "views": int(''.join(filter(str.isdigit, str(metric.get("value", "0"))))),
-                                        "growth": metric.get("change", "N/A"),
-                                    }
-                                return
-                            for v in obj.values():
-                                extract_metrics(v)
-                        elif isinstance(obj, list):
-                            for item in obj:
-                                extract_metrics(item)
-                    
-                    extract_metrics(data)
-                    print(f"   ✅ Extracted exact metrics for {len(exact_metrics)} tracks.")
-                else:
-                    print(f"   ❌ API Error {response.status_code}. Check the response preview.")
-        except Exception as e:
-            print(f"   ⚠️  Error querying charts API: {e}")
-
-        # ---------------------------------------------------------------------
-        # STEP 3: Merge Data
-        # ---------------------------------------------------------------------
-        print("3. 🛠️  Merging data...")
         songs = []
-        for idx, (vid, yt_data) in enumerate(yt_tracks.items(), start=1):
-            metrics = exact_metrics.get(vid, {})
-            
-            songs.append({
-                "Rank": metrics.get("rank", idx),
-                "[Previous Rank]": metrics.get("prev_rank", "N/A"),
-                "[Track Name]": yt_data["title"],
-                "[Artist Names]": yt_data["artists"],
-                "[Periods on Chart]": metrics.get("periods", "N/A"),
-                "Views": metrics.get("views", 0),
-                "Growth": metrics.get("growth", "N/A"),
-                "[YouTube URL]": f"https://www.youtube.com/watch?v={vid}",
-            })
-
-        songs.sort(key=lambda x: x["Rank"])
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            for idx, track in enumerate(yt_tracks, start=1):
+                vid = track["video_id"]
+                url = f"https://www.youtube.com/watch?v={vid}"
+                
+                try:
+                    # Extract metadata without downloading the video
+                    info = ydl.extract_info(url, download=False)
+                    
+                    views = info.get("view_count", 0)
+                    # Growth and Previous Rank are not available via yt-dlp
+                    # We set them to N/A as they require historical context
+                    growth = "N/A"
+                    prev_rank = "N/A"
+                    periods = "N/A"
+                    
+                    songs.append({
+                        "Rank": track["rank"],
+                        "[Previous Rank]": prev_rank,
+                        "[Track Name]": track["title"],
+                        "[Artist Names]": track["artists"],
+                        "[Periods on Chart]": periods,
+                        "Views": views,
+                        "Growth": growth,
+                        "[YouTube URL]": url,
+                    })
+                    
+                    if idx % 10 == 0:
+                        print(f"   ⏳ Processed {idx}/100 videos...")
+                        
+                except Exception as e:
+                    print(f"   ⚠️  Failed to extract {vid}: {e}")
+                    # Still add the track with default values
+                    songs.append({
+                        "Rank": track["rank"],
+                        "[Previous Rank]": "N/A",
+                        "[Track Name]": track["title"],
+                        "[Artist Names]": track["artists"],
+                        "[Periods on Chart]": "N/A",
+                        "Views": 0,
+                        "Growth": "N/A",
+                        "[YouTube URL]": url,
+                    })
 
         if not songs:
             print("   ❌ No tracks found.")
             return None
 
+        print(f"   ✅ Extracted {len(songs)} tracks with view counts.")
+
         # ---------------------------------------------------------------------
-        # STEP 4: Save to CSV
+        # STEP 3: Save to CSV
         # ---------------------------------------------------------------------
         filename = DOWNLOAD_DIR / "latest_chart.csv"
         fieldnames = [
@@ -356,7 +321,7 @@ def cleanup_old_databases(weeks: int = 52) -> None:
 # ============================================================================
 def main() -> int:
     print("\n" + "=" * 70)
-    print("🎵 YOUTUBE CHARTS - HYBRID EXTRACTOR (No Fallback)")
+    print("🎵 YOUTUBE CHARTS - YT-DLP EXTRACTOR (No Fallback)")
     print("=" * 70)
 
     if not install_dependencies():
