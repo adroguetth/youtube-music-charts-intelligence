@@ -27,6 +27,7 @@ Notes
 - **Strict Mode**: The legacy fallback mode has been permanently removed.
 - **API Stability**: Apify ensures reliable data extraction even if YouTube
   changes its frontend or API structure.
+- **Actor ID**: h7sDV53CddomktSi5 is the hardcoded Apify Actor ID.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence 
@@ -116,15 +117,14 @@ async def download_youtube_charts() -> Path | None:
 
         print("1. 📡 Triggering Apify Actor...")
         
-        # Apify actor endpoint (websift/youtube-charts-scraper)
-        # We use 'run-sync-get-dataset-items' to execute and get results in one step.
-        url = f"https://api.apify.com/v2/acts/websift~youtube-charts-scraper/run-sync-get-dataset-items?token={apify_token}"
+        # Use the specific Actor ID provided by the user.
+        # The 'run-sync-get-dataset-items' endpoint executes the actor and waits for results.
+        url = f"https://api.apify.com/v2/acts/h7sDV53CddomktSi5/run-sync-get-dataset-items?token={apify_token}"
         
-        # Payload configuration for Global Top Songs Weekly
+        # Generic payload. If this specific Actor requires a different schema,
+        # we will need to adjust these keys based on the Apify Input UI.
         payload = {
-            "charts": ["top-songs"],
-            "regions": ["global"],
-            "periods": ["weekly"],
+            "url": "https://charts.youtube.com/charts/TopSongs/global/weekly",
             "maxItems": 100
         }
 
@@ -132,7 +132,8 @@ async def download_youtube_charts() -> Path | None:
             "Content-Type": "application/json"
         }
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            print("   ⏳ Waiting for Apify to scrape the data (this may take up to 2 minutes)...")
             response = await client.post(url, json=payload, headers=headers)
             
             if response.status_code not in (200, 201):
@@ -151,14 +152,14 @@ async def download_youtube_charts() -> Path | None:
             songs = []
             for idx, item in enumerate(data[:100], start=1):
                 songs.append({
-                    "Rank": item.get("position", idx),
-                    "[Previous Rank]": item.get("previousPosition", "N/A"),
+                    "Rank": item.get("position", item.get("rank", idx)),
+                    "[Previous Rank]": item.get("previousPosition", item.get("previousRank", "N/A")),
                     "[Track Name]": item.get("title", ""),
-                    "[Artist Names]": item.get("artists", ""),
-                    "[Periods on Chart]": item.get("weeksOnChart", "N/A"),
-                    "Views": item.get("views", 0),
-                    "Growth": item.get("trend", "N/A"),
-                    "[YouTube URL]": item.get("url", ""),
+                    "[Artist Names]": item.get("artists", item.get("artist", "")),
+                    "[Periods on Chart]": item.get("weeksOnChart", item.get("periods", "N/A")),
+                    "Views": item.get("views", item.get("viewCount", 0)),
+                    "Growth": item.get("trend", item.get("growth", "N/A")),
+                    "[YouTube URL]": item.get("url", item.get("videoUrl", "")),
                 })
 
             # Save raw JSON for auditing and debugging purposes.
