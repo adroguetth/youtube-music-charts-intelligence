@@ -320,12 +320,22 @@ def update_sqlite_database(csv_path: Path, week_id: str) -> Path | None:
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chart_data'")
         
         if cursor.fetchone():
-            # 2a. If table exists, delete old records for this week and append.
-            cursor.execute("DELETE FROM chart_data WHERE week_id = ?", (week_id,))
-            cursor.execute(f"INSERT INTO chart_data SELECT * FROM {temp_table_name}")
-            cursor.execute(f"DROP TABLE {temp_table_name}")
+            # 2a. If table exists, check if schema matches to avoid column mismatch errors
+            cursor.execute("PRAGMA table_info(chart_data)")
+            existing_cols = len(cursor.fetchall())
+            new_cols = len(df.columns)
+
+            if existing_cols != new_cols:
+                print(f"   ⚠️  Schema mismatch: existing table has {existing_cols} columns, new data has {new_cols}. Rebuilding table...")
+                cursor.execute("DROP TABLE chart_data")
+                cursor.execute(f"ALTER TABLE {temp_table_name} RENAME TO chart_data")
+            else:
+                # 2b. If schema matches, delete old records for this week and append.
+                cursor.execute("DELETE FROM chart_data WHERE week_id = ?", (week_id,))
+                cursor.execute(f"INSERT INTO chart_data SELECT * FROM {temp_table_name}")
+                cursor.execute(f"DROP TABLE {temp_table_name}")
         else:
-            # 2b. If table doesn't exist, promote the temp table.
+            # 3. If table doesn't exist, promote the temp table.
             cursor.execute(f"ALTER TABLE {temp_table_name} RENAME TO chart_data")
 
         conn.commit()
