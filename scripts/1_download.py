@@ -15,7 +15,7 @@ Features
 - Stores historical data in SQLite with versioning by week.
 - Automatic backup system before database updates.
 - Handles Playwright browser automation with anti-detection measures.
-- Fallback system for when scraping is not available.
+- Strict failure: If download fails, it stops (NO fallback data).
 
 Dependencies
 ------------
@@ -35,8 +35,6 @@ Notes
   `data/`, `charts_archive/1_download-chart/databases/`, and
   `charts_archive/1_download-chart/backup/`.
 - Week identifiers follow ISO format `YYYY-WXX` (e.g., `2025-W05`).
-- The fallback mode generates 100 synthetic records if scraping fails, so the
-  pipeline never breaks silently.
 - Backups are retained for 7 days; databases are retained for 52 weeks.
 
 Author: Alfonso Droguett
@@ -147,6 +145,7 @@ def get_week_identifier(date: datetime = None) -> str:
 async def download_youtube_charts() -> Path | None:
     """
     Download YouTube Charts data using Playwright browser automation.
+    Simulates realistic human interaction to bypass anti-bot measures.
     """
     print("🎵 YouTube Charts - Downloading complete CSV (100 songs)")
     print("=" * 70)
@@ -157,16 +156,20 @@ async def download_youtube_charts() -> Path | None:
         print("1. 🚀 Starting browser...")
 
         async with async_playwright() as p:
+            # Argumentos optimizados para GitHub Actions (Linux) y evasión
             browser = await p.chromium.launch(
                 headless=True,
                 args=[
                     "--no-sandbox",
+                    "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
                     "--disable-gpu",
                     "--disable-blink-features=AutomationControlled",
                     "--disable-features=IsolateOrigins,site-per-process",
                     "--window-size=1920,1080",
                     "--start-maximized",
+                    "--mute-audio",
+                    "--no-zygote"
                 ],
             )
 
@@ -176,11 +179,11 @@ async def download_youtube_charts() -> Path | None:
                 user_agent=(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
+                    "Chrome/123.0.0.0 Safari/537.36"
                 ),
                 locale="en-US",
                 timezone_id="America/New_York",
-                permissions=["clipboard-read", "clipboard-write"],
+                permissions=["clipboard-read", "clipboard-write", "geolocation"],
                 extra_http_headers={
                     "Accept-Language": "en-US,en;q=0.9",
                     "Accept": (
@@ -189,199 +192,99 @@ async def download_youtube_charts() -> Path | None:
                     ),
                     "Referer": "https://charts.youtube.com/",
                     "DNT": "1",
+                    "Upgrade-Insecure-Requests": "1"
                 },
             )
 
+            # Script de evasión profunda (Simula un navegador real)
             await context.add_init_script(
                 """
                 Object.defineProperty(navigator, 'webdriver', {
                     get: () => undefined
                 });
                 Object.defineProperty(navigator, 'plugins', {
-                    get: () => [1, 2, 3, 4, 5]
+                    get: () => [
+                        { name: 'Chrome PDF Plugin' },
+                        { name: 'Chrome PDF Viewer' },
+                        { name: 'Native Client' }
+                    ]
                 });
                 Object.defineProperty(navigator, 'languages', {
                     get: () => ['en-US', 'en']
                 });
+                window.chrome = { runtime: {} };
                 """
             )
 
             page = await context.new_page()
-            page.set_default_timeout(120_000)
+            page.set_default_timeout(90_000)
 
             print("2. 🌐 Navigating to YouTube Charts...")
             url = "https://charts.youtube.com/charts/TopSongs/global/weekly"
-            await page.goto(url, wait_until="networkidle", timeout=120_000)
-
+            
+            await page.goto(url, wait_until="domcontentloaded", timeout=90_000)
+            
             print("3. ⏳ Waiting for page to fully load...")
-            await page.wait_for_load_state("networkidle")
-            await page.wait_for_timeout(8_000)
-
-            page_title = await page.title()
-            print(f"   📄 Page title: {page_title}")
+            try:
+                await page.wait_for_selector("#download-button", state="attached", timeout=30_000)
+                print("   ✅ Botón detectado en el DOM")
+            except Exception:
+                print("   ⚠️ El botón no apareció a tiempo, continuando de todas formas...")
+            
+            await page.wait_for_timeout(5000) 
 
             print("4. 📜 Scrolling to load dynamic content...")
-            for _ in range(5):
+            for _ in range(3):
                 await page.evaluate("window.scrollBy(0, 800)")
-                await page.wait_for_timeout(2_000)
+                await page.wait_for_timeout(1500)
 
             print("5. 🔍 SEARCHING FOR DOWNLOAD BUTTON...")
-
             filename = ARCHIVE_DIR / "latest_chart.csv"
 
-            # --- Primary selector: ID-based con CLIC FORZADO ---
-            print("   🎯 Trying ID 'download-button' with force/JS click...")
+            print("   🎯 Triggering download from Context level...")
             try:
-                await page.wait_for_selector("#download-button", timeout=15_000)
-                download_button = await page.query_selector("#download-button")
-
-                if download_button:
-                    print("   ✅ Button found by ID!")
+                # A nivel de context es más seguro para descargas dinámicas
+                async with context.expect_download(timeout=60_000) as dl_info:
+                    # Técnica avanzada: Disparar evento 'click' nativo del navegador
+                    await page.evaluate("""
+                        const btn = document.querySelector('#download-button');
+                        if (btn) {
+                            // Simular hover
+                            const mouseoverEvent = new Event('mouseover', { bubbles: true });
+                            btn.dispatchEvent(mouseoverEvent);
+                            
+                            // Clic sintético (evade validación isTrusted)
+                            const clickEvent = new MouseEvent('click', {
+                                view: window,
+                                bubbles: true,
+                                cancelable: true
+                            });
+                            btn.dispatchEvent(clickEvent);
+                        }
+                    """)
                     
-                    is_visible = await download_button.is_visible()
-                    print(f"   👁️  Button visible: {is_visible}")
+                    # Damos tiempo a que el navegador procese el Blob/Descarga
+                    await page.wait_for_timeout(3000)
 
-                    if not is_visible:
-                        print("   🔍 Scrolling to button...")
-                        await download_button.scroll_into_view_if_needed()
-                        await page.wait_for_timeout(3_000)
-
-                    # MÉTODO 1: Clic forzado con Playwright
-                    print("   ⬇️  Starting download (Force Click)...")
-                    try:
-                        async with page.expect_download(timeout=45_000) as dl_info:
-                            await download_button.click(force=True)
-                            await page.wait_for_timeout(2_000)
-
-                        download = await dl_info.value
-                        await download.save_as(filename)
-                        await browser.close()
-
-                        if filename.exists():
-                            print(f"   💾 File downloaded: {filename.stat().st_size} bytes")
-                            return filename
-                    except Exception as e:
-                        print(f"   ⚠️  Force click failed or timeout: {e}")
-                    
-                    # MÉTODO 2: Clic por JavaScript (Inyección DOM)
-                    print("   🔄 Retrying with JavaScript Click...")
-                    try:
-                        async with page.expect_download(timeout=45_000) as dl_info:
-                            await page.evaluate("document.querySelector('#download-button').click()")
-                            await page.wait_for_timeout(2_000)
-
-                        download = await dl_info.value
-                        await download.save_as(filename)
-                        await browser.close()
-
-                        if filename.exists():
-                            print(f"   💾 File downloaded via JS: {filename.stat().st_size} bytes")
-                            return filename
-                    except Exception as e:
-                        print(f"   ⚠️  JS click failed or timeout: {e}")
+                # Si llegamos aquí, Playwright capturó la descarga
+                download = await dl_info.value
+                await download.save_as(filename)
+                
+                print(f"   💾 ¡Descarga exitosa! Tamaño: {filename.stat().st_size} bytes")
+                await browser.close()
+                return filename
 
             except Exception as e:
-                print(f"   ❌ Error with ID 'download-button': {e}")
-
-            # --- Secondary selector: title attribute ---
-            print('   🎯 Trying selector \'paper-icon-button[title="download"]\'...')
-            try:
-                download_button = await page.wait_for_selector(
-                    'paper-icon-button[title="download"]', timeout=10_000
-                )
-                if download_button:
-                    print("   ✅ Button found by title!")
-                    await download_button.scroll_into_view_if_needed()
-                    await page.wait_for_timeout(2_000)
-
-                    async with page.expect_download(timeout=30_000) as dl_info:
-                        await download_button.click(force=True)
-
-                    download = await dl_info.value
-                    await download.save_as(filename)
-                    await browser.close()
-
-                    if filename.exists():
-                        print("   💾 File downloaded successfully!")
-                        return filename
-
-            except Exception as e:
-                print(f"   ❌ Error with title selector: {e}")
-
-            # --- Tertiary selector: aria-label ---
-            print('   🎯 Trying generic selector \'button[aria-label*="download" i]\'...')
-            try:
-                download_button = await page.wait_for_selector(
-                    'button[aria-label*="download" i]', timeout=10_000
-                )
-                if download_button:
-                    print("   ✅ Button found by aria-label!")
-                    await download_button.scroll_into_view_if_needed()
-                    await page.wait_for_timeout(2_000)
-
-                    async with page.expect_download(timeout=30_000) as dl_info:
-                        await download_button.click(force=True)
-
-                    download = await dl_info.value
-                    await download.save_as(filename)
-                    await browser.close()
-
-                    if filename.exists():
-                        print("   💾 File downloaded successfully!")
-                        return filename
-
-            except Exception as e:
-                print(f"   ❌ Error with aria-label selector: {e}")
-
-            # --- Final fallback: scan all buttons ---
-            print("   🎯 Searching all buttons on page...")
-            try:
-                all_buttons = await page.query_selector_all(
-                    "button, paper-icon-button, iron-icon"
-                )
-                print(f"   🔍 Found {len(all_buttons)} potential buttons")
-
-                for idx, button in enumerate(all_buttons):
-                    try:
-                        tag_name = await button.evaluate("el => el.tagName")
-                        outer_html = await button.evaluate("el => el.outerHTML")
-
-                        if any(
-                            kw in outer_html.lower()
-                            for kw in ("download", "descarga", "export", "csv")
-                        ):
-                            print(f"   🎯 Attempting button {idx + 1}: {tag_name}")
-
-                            is_visible = await button.is_visible()
-                            if not is_visible:
-                                await button.scroll_into_view_if_needed()
-                                await page.wait_for_timeout(1_000)
-
-                            async with page.expect_download(timeout=15_000) as dl_info:
-                                await button.click(force=True)
-                                await page.wait_for_timeout(2_000)
-
-                            download = await dl_info.value
-                            await download.save_as(filename)
-                            await browser.close()
-
-                            if filename.exists():
-                                print("   💾 File downloaded successfully!")
-                                return filename
-                    except Exception:
-                        continue
-
-            except Exception as e:
-                print(f"   ❌ Error in fallback search: {e}")
-
-            await browser.close()
-            print("   ❌ Could not find download button")
-            return None
+                print(f"   ❌ Error al descargar: {e}")
+                # Tomar captura de pantalla para depurar en GitHub Actions
+                error_img = ARCHIVE_DIR / "error_github_actions.png"
+                await page.screenshot(path=error_img)
+                print(f"   📸 Captura guardada en {error_img}")
+                raise e # Relanzamos el error para que main() lo detenga
 
     except Exception as e:
-        print(f"⚠️  Error in download process: {e}")
+        print(f"⚠️  Error crítico en el proceso: {e}")
         import traceback
-
         traceback.print_exc()
         return None
 
@@ -390,9 +293,6 @@ async def download_youtube_charts() -> Path | None:
 # BACKUP MANAGEMENT
 # ============================================================================
 def create_backup_before_update(week_id: str) -> None:
-    """
-    Create backup of existing database before updating.
-    """
     db_path = DATABASE_DIR / f"youtube_charts_{week_id}.db"
 
     if not db_path.exists():
@@ -409,9 +309,6 @@ def create_backup_before_update(week_id: str) -> None:
 
 
 def cleanup_old_backups(days: int = 7) -> None:
-    """
-    Remove backup files older than specified days.
-    """
     print(f"   🧹 Cleaning backups older than {days} days...")
 
     cutoff_date = datetime.now() - timedelta(days=days)
@@ -432,9 +329,6 @@ def cleanup_old_backups(days: int = 7) -> None:
 
 
 def cleanup_old_databases(weeks: int = 52) -> None:
-    """
-    Remove database files older than specified weeks.
-    """
     print(f"   🧹 Cleaning databases older than {weeks} weeks...")
 
     current_date = datetime.now()
@@ -464,14 +358,10 @@ def cleanup_old_databases(weeks: int = 52) -> None:
 # SQLITE DATABASE UPDATE
 # ============================================================================
 def update_sqlite_database(csv_path: Path, week_id: str) -> Path | None:
-    """
-    Update SQLite database with new chart data.
-    """
     print("   📊 Processing chart data...")
 
     try:
         import sqlite3
-
         import pandas as pd
 
         try:
@@ -568,51 +458,7 @@ def update_sqlite_database(csv_path: Path, week_id: str) -> Path | None:
     except Exception as e:
         print(f"⚠️  SQLite error: {e}")
         import traceback
-
         traceback.print_exc()
-        return None
-
-
-# ============================================================================
-# FALLBACK DATA
-# ============================================================================
-def create_fallback_file() -> Path | None:
-    """
-    Create fallback file with realistic sample data.
-    """
-    print("🆘 Creating fallback file with realistic data...")
-
-    try:
-        import pandas as pd
-
-        data = []
-        for i in range(1, 101):
-            data.append(
-                {
-                    "Rank": i,
-                    "Previous Rank": max(1, i - 1) if i > 1 else 1,
-                    "Track Name": f"Popular Song {i}",
-                    "Artist Names": (
-                        f"Artist {chr(65 + ((i - 1) % 26))} and Collaborators"
-                    ),
-                    "Periods on Chart": 10 + (i % 40),
-                    "Views": 5_000_000 + (100 - i) * 50_000,
-                    "Growth": f"{((101 - i) / 100):.2f}%",
-                    "YouTube URL": (
-                        f"https://www.youtube.com/watch?v=example{i:03d}"
-                    ),
-                }
-            )
-
-        df = pd.DataFrame(data)
-        filename = ARCHIVE_DIR / "latest_chart.csv"
-        df.to_csv(filename, index=False, encoding="utf-8")
-
-        print(f"📋 Fallback created: {filename} ({len(df)} records)")
-        return filename
-
-    except Exception as e:
-        print(f"❌ Error creating fallback: {e}")
         return None
 
 
@@ -620,9 +466,6 @@ def create_fallback_file() -> Path | None:
 # DATABASE INVENTORY
 # ============================================================================
 def list_available_databases() -> None:
-    """
-    List all available database files with statistics.
-    """
     import sqlite3
 
     dbs = sorted(DATABASE_DIR.glob("youtube_charts_*.db"))
@@ -680,26 +523,22 @@ def main() -> int:
     playwright_ready = install_playwright()
 
     if not playwright_ready:
-        print("   ⚠️  Playwright not ready, will use fallback mode")
+        print("❌ CRITICAL ERROR: Playwright is not ready. Aborting.")
+        return 1
 
     week_id = get_week_identifier()
     print(f"\n📆 Current week: {week_id}")
-    print("💻 Running locally")
+    print("💻 Running locally / cloud")
 
     print("\n1. 📥 DOWNLOADING YOUTUBE CHARTS (Complete CSV)...")
     print("   ⏱️  This may take 1-2 minutes...")
 
-    csv_path = None
-    if playwright_ready:
-        csv_path = asyncio.run(download_youtube_charts())
+    csv_path = asyncio.run(download_youtube_charts())
 
+    # CONTROL ESTRICTO: Si no se descargó, el script muere aquí.
     if not csv_path or not os.path.exists(csv_path):
-        print("   ⚠️  Automatic download failed or unavailable")
-        print("   📋 Using sample data...")
-        csv_path = create_fallback_file()
-
-    if not csv_path or not os.path.exists(csv_path):
-        print("❌ CRITICAL ERROR: Could not obtain CSV file")
+        print("\n❌ CRITICAL ERROR: Automatic download failed.")
+        print("🛑 Fallback mode disabled. Aborting execution to prevent data pollution.")
         return 1
 
     print(f"\n   📄 File obtained: {csv_path.name}")
