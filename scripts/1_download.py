@@ -70,21 +70,6 @@ for dir_path in [OUTPUT_DIR, ARCHIVE_DIR, DATABASE_DIR, BACKUP_DIR]:
 def install_playwright() -> bool:
     """
     Check and install Playwright dependencies if needed.
-
-    Performs a comprehensive check of:
-    1. Playwright Python package installation.
-    2. Playwright browser binaries (Chromium).
-
-    Returns
-    -------
-    bool
-        True if Playwright is ready to use, False otherwise.
-
-    Notes
-    -----
-    Automatically installs both the `playwright` package and the Chromium
-    browser if they are missing. Uses `subprocess` to isolate installation
-    from the current process.
     """
     print("🔧 Checking Playwright installation...")
 
@@ -149,16 +134,6 @@ def install_playwright() -> bool:
 def get_week_identifier(date: datetime = None) -> str:
     """
     Generate ISO week identifier string.
-
-    Parameters
-    ----------
-    date : datetime, optional
-        Date to get week for. Uses current date if None.
-
-    Returns
-    -------
-    str
-        Week identifier in format 'YYYY-WXX' (e.g., '2025-W05').
     """
     if date is None:
         date = datetime.now()
@@ -172,24 +147,6 @@ def get_week_identifier(date: datetime = None) -> str:
 async def download_youtube_charts() -> Path | None:
     """
     Download YouTube Charts data using Playwright browser automation.
-
-    Launches a headless Chromium browser with anti-detection measures,
-    navigates to YouTube Charts weekly top songs page, locates and clicks the
-    download button, and saves the CSV file with complete data (100 songs).
-
-    Returns
-    -------
-    Path or None
-        Path to downloaded CSV file if successful, None otherwise.
-
-    Notes
-    -----
-    Anti-detection features:
-    - Custom user agent.
-    - Disabled webdriver flags.
-    - Realistic viewport and locale settings.
-    - Multiple fallback selectors for the download button (ID, title,
-      aria-label, and full DOM scan).
     """
     print("🎵 YouTube Charts - Downloading complete CSV (100 songs)")
     print("=" * 70)
@@ -272,14 +229,15 @@ async def download_youtube_charts() -> Path | None:
 
             filename = ARCHIVE_DIR / "latest_chart.csv"
 
-            # --- Primary selector: ID-based ---
-            print("   🎯 Trying ID 'download-button'...")
+            # --- Primary selector: ID-based con CLIC FORZADO ---
+            print("   🎯 Trying ID 'download-button' with force/JS click...")
             try:
                 await page.wait_for_selector("#download-button", timeout=15_000)
                 download_button = await page.query_selector("#download-button")
 
                 if download_button:
                     print("   ✅ Button found by ID!")
+                    
                     is_visible = await download_button.is_visible()
                     print(f"   👁️  Button visible: {is_visible}")
 
@@ -288,27 +246,39 @@ async def download_youtube_charts() -> Path | None:
                         await download_button.scroll_into_view_if_needed()
                         await page.wait_for_timeout(3_000)
 
-                    print("   ⬇️  Starting download...")
-                    async with page.expect_download(timeout=45_000) as dl_info:
-                        await download_button.click()
+                    # MÉTODO 1: Clic forzado con Playwright
+                    print("   ⬇️  Starting download (Force Click)...")
+                    try:
+                        async with page.expect_download(timeout=45_000) as dl_info:
+                            await download_button.click(force=True)
+                            await page.wait_for_timeout(2_000)
 
-                    download = await dl_info.value
-                    await download.save_as(filename)
-                    await browser.close()
+                        download = await dl_info.value
+                        await download.save_as(filename)
+                        await browser.close()
 
-                    if filename.exists():
-                        file_size = filename.stat().st_size
-                        print(f"   💾 File downloaded: {file_size} bytes")
+                        if filename.exists():
+                            print(f"   💾 File downloaded: {filename.stat().st_size} bytes")
+                            return filename
+                    except Exception as e:
+                        print(f"   ⚠️  Force click failed or timeout: {e}")
+                    
+                    # MÉTODO 2: Clic por JavaScript (Inyección DOM)
+                    print("   🔄 Retrying with JavaScript Click...")
+                    try:
+                        async with page.expect_download(timeout=45_000) as dl_info:
+                            await page.evaluate("document.querySelector('#download-button').click()")
+                            await page.wait_for_timeout(2_000)
 
-                        with open(filename, "r", encoding="utf-8") as f:
-                            lines = f.readlines()
-                            print(f"   📊 Lines in CSV: {len(lines)}")
+                        download = await dl_info.value
+                        await download.save_as(filename)
+                        await browser.close()
 
-                        if len(lines) >= 100:
-                            print(f"   🎉 COMPLETE CSV DOWNLOADED! ({len(lines) - 1} songs)")
-                        else:
-                            print(f"   ⚠️  CSV may be incomplete: only {len(lines) - 1} songs")
-                        return filename
+                        if filename.exists():
+                            print(f"   💾 File downloaded via JS: {filename.stat().st_size} bytes")
+                            return filename
+                    except Exception as e:
+                        print(f"   ⚠️  JS click failed or timeout: {e}")
 
             except Exception as e:
                 print(f"   ❌ Error with ID 'download-button': {e}")
@@ -325,7 +295,7 @@ async def download_youtube_charts() -> Path | None:
                     await page.wait_for_timeout(2_000)
 
                     async with page.expect_download(timeout=30_000) as dl_info:
-                        await download_button.click()
+                        await download_button.click(force=True)
 
                     download = await dl_info.value
                     await download.save_as(filename)
@@ -350,7 +320,7 @@ async def download_youtube_charts() -> Path | None:
                     await page.wait_for_timeout(2_000)
 
                     async with page.expect_download(timeout=30_000) as dl_info:
-                        await download_button.click()
+                        await download_button.click(force=True)
 
                     download = await dl_info.value
                     await download.save_as(filename)
@@ -388,7 +358,7 @@ async def download_youtube_charts() -> Path | None:
                                 await page.wait_for_timeout(1_000)
 
                             async with page.expect_download(timeout=15_000) as dl_info:
-                                await button.click()
+                                await button.click(force=True)
                                 await page.wait_for_timeout(2_000)
 
                             download = await dl_info.value
@@ -422,15 +392,6 @@ async def download_youtube_charts() -> Path | None:
 def create_backup_before_update(week_id: str) -> None:
     """
     Create backup of existing database before updating.
-
-    Parameters
-    ----------
-    week_id : str
-        ISO week identifier for the database to backup.
-
-    Returns
-    -------
-    None
     """
     db_path = DATABASE_DIR / f"youtube_charts_{week_id}.db"
 
@@ -450,15 +411,6 @@ def create_backup_before_update(week_id: str) -> None:
 def cleanup_old_backups(days: int = 7) -> None:
     """
     Remove backup files older than specified days.
-
-    Parameters
-    ----------
-    days : int, optional
-        Number of days to retain backups (default: 7).
-
-    Returns
-    -------
-    None
     """
     print(f"   🧹 Cleaning backups older than {days} days...")
 
@@ -482,17 +434,6 @@ def cleanup_old_backups(days: int = 7) -> None:
 def cleanup_old_databases(weeks: int = 52) -> None:
     """
     Remove database files older than specified weeks.
-
-    Keeps at least one year (52 weeks) of data by default.
-
-    Parameters
-    ----------
-    weeks : int, optional
-        Number of weeks to retain databases (default: 52).
-
-    Returns
-    -------
-    None
     """
     print(f"   🧹 Cleaning databases older than {weeks} weeks...")
 
@@ -525,22 +466,6 @@ def cleanup_old_databases(weeks: int = 52) -> None:
 def update_sqlite_database(csv_path: Path, week_id: str) -> Path | None:
     """
     Update SQLite database with new chart data.
-
-    Reads the CSV into a pandas DataFrame, adds metadata columns, creates a
-    backup if the database exists, inserts data using a temporary-table
-    pattern (atomic swap), and creates indexes for query optimization.
-
-    Parameters
-    ----------
-    csv_path : Path
-        Path to CSV file with chart data.
-    week_id : str
-        ISO week identifier for this data.
-
-    Returns
-    -------
-    Path or None
-        Path to updated database file, None if error.
     """
     print("   📊 Processing chart data...")
 
@@ -654,14 +579,6 @@ def update_sqlite_database(csv_path: Path, week_id: str) -> Path | None:
 def create_fallback_file() -> Path | None:
     """
     Create fallback file with realistic sample data.
-
-    Used when scraping fails or is unavailable. Generates 100 dummy records
-    with a realistic structure matching the YouTube Charts CSV format.
-
-    Returns
-    -------
-    Path or None
-        Path to created fallback CSV file, None if error.
     """
     print("🆘 Creating fallback file with realistic data...")
 
@@ -705,13 +622,6 @@ def create_fallback_file() -> Path | None:
 def list_available_databases() -> None:
     """
     List all available database files with statistics.
-
-    Displays the number of databases, records per database, date range
-    covered, file size, and total records across all databases.
-
-    Returns
-    -------
-    None
     """
     import sqlite3
 
@@ -759,18 +669,6 @@ def list_available_databases() -> None:
 def main() -> int:
     """
     Entry point of the scraper.
-
-    Workflow:
-    1. Verify Playwright installation (auto-install if missing).
-    2. Download YouTube Charts CSV (or generate fallback data).
-    3. Update SQLite database.
-    4. Cleanup old backups and databases.
-    5. Display summary statistics.
-
-    Returns
-    -------
-    int
-        Exit code (0 for success, 1 for error).
     """
     print("\n" + "=" * 70)
     print("🎵 YOUTUBE CHARTS - COMPLETE EXTRACTOR (100 songs)")
