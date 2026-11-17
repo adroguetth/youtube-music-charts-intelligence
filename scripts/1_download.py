@@ -5,17 +5,18 @@ Top-level entry point for downloading the weekly YouTube Charts Top 100 songs
 and persisting them into a localized SQLite database. This module acts as the
 first stage in the broader intelligence pipeline.
 
-This script orchestrates the extraction of chart data using the `ytmusicapi`
-library, circumventing the need for browser automation and its
-associated anti-bot mitigations. It implements a strict "fail-hard" policy: if
-the extraction or persistence fails, the pipeline aborts immediately to prevent
-data pollution from fallback synthetic records.
+This script orchestrates the extraction of chart data using direct HTTP requests
+to the InnerTube API, circumventing the need for browser automation (Playwright)
+and its associated anti-bot mitigations. It implements a strict "fail-hard" 
+policy: if the extraction or persistence fails, the pipeline aborts immediately 
+to prevent data pollution from fallback synthetic records.
 
 Features
 --------
-- Downloads the complete weekly Top 100 songs CSV from YouTube Charts.
-- Leverages `ytmusicapi` for direct API access, bypassing HTML parsing and
-  browser CAPTCHAs.
+- Downloads the complete weekly Top 100 songs from YouTube Charts with exact
+  metrics (Rank, Previous Rank, Views, Growth, Periods on Chart, Video URL).
+- Leverages direct HTTP requests to the InnerTube API, bypassing HTML parsing
+  and browser CAPTCHAs.
 - Stores historical data in SQLite with versioning based on ISO week format
   (`YYYY-WXX`).
 - Implements an automatic backup system before database mutations.
@@ -24,15 +25,15 @@ Features
 Dependencies
 ------------
 - Internal: none (self-contained script).
-- External: `ytmusicapi`, `pandas`, `sqlite3` (stdlib), `asyncio`, `shutil`,
-  `subprocess`.
+- External: `httpx`, `ytmusicapi`, `pandas`, `sqlite3` (stdlib), `asyncio`, 
+  `shutil`, `subprocess`.
 - Downstream: Script 2.1 (Artist Metadata Enrichment) consumes the generated
   SQLite databases.
 
 Requirements
 ------------
 - Python 3.7+
-- `ytmusicapi` and `pandas` installed (auto-installed if missing).
+- `httpx`, `ytmusicapi`, and `pandas` installed (auto-installed if missing).
 - Write access to the `charts_archive/` directory structure.
 
 Notes
@@ -45,8 +46,8 @@ Notes
   has been permanently removed. If the API fails, the script exits with code 1.
 - **Backup retention**: Backups are retained for 7 days; databases are
   retained for 52 weeks.
-- **API Stability**: `ytmusicapi` is used over raw InnerTube requests to
-  automatically handle dynamic `clientVersion` generation and token rotation.
+- **API Stability**: Direct InnerTube requests require dynamic generation of
+  the `clientVersion` to prevent HTTP 400 (Invalid Argument) errors.
 
 Author: Alfonso Droguett
 Repository: https://github.com/adroguetth/youtube-music-charts-intelligence 
@@ -72,8 +73,36 @@ DATABASE_DIR = ARCHIVE_DIR / "databases"
 BACKUP_DIR = ARCHIVE_DIR / "backup"
 DOWNLOAD_DIR = ARCHIVE_DIR / "downloads"
 
+# Ensure all required directories exist before any file operations.
 for dir_path in [OUTPUT_DIR, ARCHIVE_DIR, DATABASE_DIR, BACKUP_DIR, DOWNLOAD_DIR]:
     dir_path.mkdir(parents=True, exist_ok=True)
+
+# ============================================================================
+# DEPENDENCY MANAGEMENT
+# ============================================================================
+def install_dependencies() -> bool:
+    """
+    Check and install required external dependencies if needed.
+    
+    Uses `httpx` for direct API requests, `ytmusicapi` for context headers,
+    and `pandas` for data manipulation.
+    """
+    print("🔧 Checking dependencies (httpx, ytmusicapi, pandas)...")
+    try:
+        import httpx
+        from ytmusicapi import YTMusic
+        import pandas
+        print("   ✅ Dependencies are installed")
+        return True
+    except ImportError:
+        print("   📦 Installing httpx, ytmusicapi, and pandas...")
+        # Use sys.executable to ensure installation in the current virtual environment.
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "httpx", "ytmusicapi", "pandas"], 
+            check=True
+        )
+        print("   ✅ Dependencies installed")
+        return True
 
 # ============================================================================
 # YOUTUBE CHARTS DOWNLOADER (Custom HTTP API Request)
@@ -94,7 +123,8 @@ async def download_youtube_charts() -> Path | None:
         # Initialize ytmusicapi to get the correct headers/cookies (if needed)
         # However, for charts.youtube.com, a direct WEB_REMIX request usually works.
         
-        # We use a dynamic client version based on today's date
+        # We use a dynamic client version based on today's date to prevent HTTP 400.
+        # YouTube rejects requests with outdated client versions.
         today_str = datetime.now().strftime("%Y%m%d")
         client_version = f"1.{today_str}.01.00"
 
@@ -320,7 +350,7 @@ def update_sqlite_database(csv_path: Path, week_id: str) -> Path | None:
 
 
 # ============================================================================
-# BACKUP & CLEANUP FUNCTIONS (Keep as is)
+# BACKUP & CLEANUP FUNCTIONS
 # ============================================================================
 def create_backup_before_update(week_id: str) -> None:
     db_path = DATABASE_DIR / f"youtube_charts_{week_id}.db"
@@ -361,6 +391,10 @@ def main() -> int:
     print("\n" + "=" * 70)
     print("🎵 YOUTUBE CHARTS - EXTRACTOR (No Fallback)")
     print("=" * 70)
+
+    if not install_dependencies():
+        print("❌ CRITICAL: Dependency installation failed. Aborting.")
+        return 1
 
     week_id = get_week_identifier()
     print(f"\n📆 Current week: {week_id}")
