@@ -1,7 +1,7 @@
 # ============================================================
-# Script 1: Download YouTube Charts (Playwright + SQLite)
+# Script 1: Download YouTube Charts (ytmusicapi + SQLite)
 # ============================================================
-playwright>=1.61.0
+ytmusicapi
 pandas>=2.2.3
 
 # ============================================================
