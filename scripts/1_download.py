@@ -15,7 +15,7 @@ Features
 - Stores historical data in SQLite with versioning by week.
 - Automatic backup system before database updates.
 - Handles Playwright browser automation with anti-detection measures.
-- Strict failure: If download fails, it stops (NO fallback data).
+- STRICT FAILURE: If download fails, it stops (NO fallback data).
 
 Dependencies
 ------------
@@ -105,7 +105,7 @@ def install_playwright() -> bool:
         print("   📦 Installing Playwright...")
 
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "playwright", "pandas"],
+            [sys.executable, "-m", "pip", "install", "playwright", "pandas", "requests"],
             capture_output=True,
             text=True,
         )
@@ -140,36 +140,37 @@ def get_week_identifier(date: datetime = None) -> str:
 
 
 # ============================================================================
-# YOUTUBE CHARTS DOWNLOADER
+# YOUTUBE CHARTS DOWNLOADER (HTTP BYPASS)
 # ============================================================================
 async def download_youtube_charts() -> Path | None:
+    """
+    Download YouTube Charts data using a hybrid approach:
+    1. Use Playwright to load the page and get valid session cookies.
+    2. Use requests to download the CSV directly via HTTP.
+    """
     print("🎵 YouTube Charts - Downloading complete CSV (100 songs)")
     print("=" * 70)
 
     try:
         from playwright.async_api import async_playwright
+        import requests
 
-        print("1. 🚀 Starting browser...")
+        print("1. 🚀 Starting browser to get session cookies...")
 
         async with async_playwright() as p:
+            # Intentamos usar el Chrome real en lugar del Chromium de Playwright
             browser = await p.chromium.launch(
                 headless=True,
+                channel="chrome",  # Usar Chrome real para mayor compatibilidad
                 args=[
                     "--no-sandbox",
-                    "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
                     "--disable-gpu",
                     "--disable-blink-features=AutomationControlled",
-                    "--disable-features=IsolateOrigins,site-per-process",
-                    "--window-size=1920,1080",
-                    "--start-maximized",
-                    "--mute-audio",
-                    "--no-zygote"
                 ],
             )
 
             context = await browser.new_context(
-                accept_downloads=True,
                 viewport={"width": 1920, "height": 1080},
                 user_agent=(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -178,111 +179,72 @@ async def download_youtube_charts() -> Path | None:
                 ),
                 locale="en-US",
                 timezone_id="America/New_York",
-                permissions=["clipboard-read", "clipboard-write", "geolocation"],
-                extra_http_headers={
-                    "Accept-Language": "en-US,en;q=0.9",
-                    "Accept": (
-                        "text/html,application/xhtml+xml,application/xml;q=0.9,"
-                        "image/webp,*/*;q=0.8"
-                    ),
-                    "Referer": "https://charts.youtube.com/",
-                    "DNT": "1",
-                    "Upgrade-Insecure-Requests": "1"
-                },
             )
 
             await context.add_init_script(
-                """
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => undefined
-                });
-                Object.defineProperty(navigator, 'plugins', {
-                    get: () => [
-                        { name: 'Chrome PDF Plugin' },
-                        { name: 'Chrome PDF Viewer' },
-                        { name: 'Native Client' }
-                    ]
-                });
-                Object.defineProperty(navigator, 'languages', {
-                    get: () => ['en-US', 'en']
-                });
-                window.chrome = { runtime: {} };
-                """
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
             )
 
             page = await context.new_page()
-            page.set_default_timeout(90_000)
-
+            
             print("2. 🌐 Navigating to YouTube Charts...")
             url = "https://charts.youtube.com/charts/TopSongs/global/weekly"
             await page.goto(url, wait_until="domcontentloaded", timeout=90_000)
+            
+            # Esperamos un poco para que se establezcan las cookies
+            await page.wait_for_timeout(5000)
 
-            print("3. ⏳ Waiting for page to fully load...")
-            # Bucle de reintentos para encontrar el botón
-            button_found = False
-            for attempt in range(3):
-                try:
-                    print(f"   🔎 Intento {attempt + 1}/3 buscando el botón...")
-                    await page.wait_for_selector("#download-button", state="attached", timeout=20_000)
-                    print("   ✅ Botón detectado en el DOM")
-                    button_found = True
-                    break
-                except Exception:
-                    print("   ⚠️ Botón no encontrado aún. Recargando la página...")
-                    await page.reload(wait_until="domcontentloaded")
-                    await page.wait_for_timeout(5000)
+            print("3. 🍪 Extrayendo cookies de sesión...")
+            cookies = await context.cookies()
+            cookie_dict = {c['name']: c['value'] for c in cookies}
+            
+            # Cerramos el navegador, ya no lo necesitamos
+            await browser.close()
 
-            if not button_found:
-                print("   ❌ El botón no apareció tras 3 intentos.")
-                # Tomamos screenshot para diagnosticar antes de fallar
-                await page.screenshot(path=str(ARCHIVE_DIR / "error_no_button.png"))
-                await browser.close()
-                return None
+            print("4. 📥 Intentando descarga directa por HTTP (bypass de DOM)...")
+            
+            # URL interna de descarga del CSV
+            download_url = "https://charts.youtube.com/charts/TopSongs/global/weekly?download=csv"
+            
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+                "Accept": "text/csv,application/csv,*/*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://charts.youtube.com/charts/TopSongs/global/weekly",
+            }
 
-            await page.wait_for_timeout(3000)
+            # Hacemos la petición pasando las cookies
+            response = requests.get(download_url, headers=headers, cookies=cookie_dict, allow_redirects=True)
 
-            print("4. 📜 Scrolling to load dynamic content...")
-            for _ in range(3):
-                await page.evaluate("window.scrollBy(0, 800)")
-                await page.wait_for_timeout(1500)
-
-            print("5. 🔍 SEARCHING FOR DOWNLOAD BUTTON...")
             filename = ARCHIVE_DIR / "latest_chart.csv"
 
-            print("   🎯 Triggering download from PAGE level...")
-            try:
-                # Usamos page.expect_download, NO context.
-                async with page.expect_download(timeout=60_000) as dl_info:
-                    await page.evaluate("""
-                        const btn = document.querySelector('#download-button');
-                        if (btn) {
-                            const mouseoverEvent = new Event('mouseover', { bubbles: true });
-                            btn.dispatchEvent(mouseoverEvent);
-                            
-                            const clickEvent = new MouseEvent('click', {
-                                view: window,
-                                bubbles: true,
-                                cancelable: true
-                            });
-                            btn.dispatchEvent(clickEvent);
-                        }
-                    """)
-                    await page.wait_for_timeout(3000)
-
-                download = await dl_info.value
-                await download.save_as(filename)
+            if response.status_code == 200:
+                content_type = response.headers.get('Content-Type', '')
                 
-                print(f"   💾 ¡Descarga exitosa! Tamaño: {filename.stat().st_size} bytes")
-                await browser.close()
-                return filename
+                # Si el servidor devuelve HTML, es un bloqueo/Captcha
+                if 'text/html' in content_type:
+                    print("   ⚠️  El servidor devolvió HTML (probablemente Captcha o bloqueo).")
+                    print("   💡 Contenido recibido:", response.text[:200])
+                    return None
 
-            except Exception as e:
-                print(f"   ❌ Error al descargar: {e}")
-                error_img = ARCHIVE_DIR / "error_github_actions.png"
-                await page.screenshot(path=str(error_img))
-                print(f"   📸 Captura guardada en {error_img}")
-                # Relanzamos para que falle estrictamente
-                raise e
+                # Guardar archivo
+                with open(filename, 'wb') as f:
+                    f.write(response.content)
+                
+                print(f"   💾 ¡Descarga exitosa por HTTP! Tamaño: {filename.stat().st_size} bytes")
+                
+                # Verificar que tenga datos reales
+                with open(filename, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                    if len(lines) > 10:
+                        return filename
+                    else:
+                        print("   ⚠️  El archivo descargado está vacío o incompleto.")
+                        return None
+            else:
+                print(f"   ❌ Error HTTP: {response.status_code}")
+                print(f"   Respuesta: {response.text[:200]}")
+                return None
 
     except Exception as e:
         print(f"⚠️  Error crítico en el proceso: {e}")
