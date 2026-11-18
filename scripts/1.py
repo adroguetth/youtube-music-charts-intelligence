@@ -22,6 +22,7 @@ Diferencias clave vs la version para CI:
 - Zona horaria local America/Santiago por defecto en PC local.
 - Logs en logs/scraper_YYYY-MM-DD.log ademas de pantalla.
 - --show-browser para ver el navegador y resolver captcha a mano si aparece.
+    ap.add_argument("--headless", action="store_true", help="Forzar modo sin ventana (NO recomendado: en headless Google muestra captcha)")
 - --pause para que la ventana no se cierre al hacer doble clic.
 - --open-folder para abrir la carpeta con el CSV y la DB al terminar.
 - Detecta si lo corres por error en GitHub Actions y avisa.
@@ -120,9 +121,7 @@ log = logging.getLogger("youtube_charts")
 # CONSTANTS AND DIRECTORIES - sin efectos al importar
 # ---------------------------------------------------------------------------
 try:
-    # Si 1.py esta en scripts/, la raiz es parent.parent (youtube-music-charts-intelligence)
-    _BASE_RAW = Path(__file__).resolve().parent
-    BASE_DIR = _BASE_RAW.parent if _BASE_RAW.name == "scripts" else _BASE_RAW
+    BASE_DIR = Path(__file__).resolve().parent
 except NameError:
     BASE_DIR = Path.cwd()
 
@@ -1343,7 +1342,7 @@ async def _detect_captcha(page) -> bool:
         return False
 
 
-async def _wait_for_captcha_resolution(page, url: str, show_browser: bool, max_wait: int = 180, terminal_mode: bool = False) -> bool:
+async def _wait_for_captcha_resolution(page, url: str, show_browser: bool, max_wait: int = 180) -> bool:
     """Si hay captcha, espera a que desaparezca. Si hay navegador visible, deja que lo resuelvas tu."""
     try:
         has = await _detect_captcha(page)
@@ -1361,7 +1360,7 @@ async def _wait_for_captcha_resolution(page, url: str, show_browser: bool, max_w
         pass
     log.warning("CAPTCHA DETECTADO en %s", url)
     if show_browser:
-        log.warning("Resuelve el CAPTCHA a mano en la ventana de Chrome que esta abierta." if not terminal_mode else "Captcha en --terminal / GitHub: no hay humano para resolverlo, se esperara solo 20s y se seguira con youtubei directo.")
+        log.warning("Resuelve el CAPTCHA a mano en la ventana de Chrome que esta abierta.")
         log.warning("Tienes %d segundos. El scraper esperara a que el chart aparezca, no necesitas presionar nada en la terminal.", max_wait)
         log.warning("Tip: si lo resuelves una vez con tu perfil persistente (.browser-profile), Google confia en ese perfil y la proxima vez casi no sale.")
     else:
@@ -1385,7 +1384,7 @@ async def _wait_for_captcha_resolution(page, url: str, show_browser: bool, max_w
     return False
 
 
-async def download_youtube_charts(chart: str = "TopSongs", country: str = "global", show_browser: bool = False, use_chrome: bool = False, keep_profile: bool = True, terminal_mode: bool = False) -> Optional[Path]:
+async def download_youtube_charts(chart: str = "TopSongs", country: str = "global", show_browser: bool = False, use_chrome: bool = False, keep_profile: bool = True) -> Optional[Path]:
     """
     Descarga con Playwright. Orden: DOM -> JSON de red -> boton.
     Version LOCAL: puede usar tu Chrome, perfil persistente y navegador visible.
@@ -1532,7 +1531,7 @@ async def download_youtube_charts(chart: str = "TopSongs", country: str = "globa
                     await page.wait_for_timeout(4000)
                     # CAPTCHA: si Google lo muestra, hay que resolverlo a mano, si no todo dara 0
                     try:
-                        await _wait_for_captcha_resolution(page, url, show_browser, max_wait=(20 if terminal_mode else 180), terminal_mode=terminal_mode)
+                        await _wait_for_captcha_resolution(page, url, show_browser, max_wait=180)
                     except Exception as e:
                         log.info("Espera captcha fallo: %s", e)
                     # Espera por contenido real, no solo por timeout fijo
@@ -1693,7 +1692,6 @@ def _main_inner(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--use-chrome", action="store_true", help="LOCAL: usa tu Google Chrome instalado en vez de Chromium descargado. Menos deteccion de bot.")
     parser.add_argument("--no-profile", action="store_true", help="LOCAL: no usa perfil persistente .browser-profile/, usa perfil temporal limpio.")
     parser.add_argument("--open-folder", action="store_true", help="LOCAL: al terminar abre la carpeta con el CSV y la DB en el explorador.")
-    parser.add_argument("--terminal", action="store_true", help="Modo terminal puro: sin ventana, sin xvfb, sin --show-browser. Usa headless=new + stealth. Ideal para cron.")
     parser.add_argument("--force", action="store_true", help="Re-scrapear aunque la semana ya tenga datos.")
     parser.add_argument("--pause", action="store_true", help="LOCAL: al terminar espera Enter antes de cerrar. Ideal para doble clic, si no la ventana se cierra y no ves el resultado.")
     args = parser.parse_args(argv)
@@ -1712,16 +1710,6 @@ def _main_inner(argv: Optional[List[str]] = None) -> int:
     else:
         log.info('Modo PC LOCAL Linux - Linux=%s, perfil persistente=%s, zona=%s, DISPLAY=%s', IS_LINUX, not args.no_profile, LOCAL_TIMEZONE, os.environ.get('DISPLAY', '(sin DISPLAY)'))
 
-    # Modo terminal: fuerza headless, sin ventana, sin pausa
-    if getattr(args, "terminal", False):
-        args.headless = True
-        if getattr(args, "show_browser", False):
-            log.info("Modo --terminal: ignorando --show-browser (en terminal no hay ventana).")
-            args.show_browser = False
-        if getattr(args, "pause", False):
-            log.info("Modo --terminal: ignorando --pause.")
-            args.pause = False
-        log.info("Modo TERMINAL: sin ventana, sin xvfb. headless=new + stealth + perfil persistente. Sin pausa, sin input(), sin esperar humano.")
     week_id = args.week or get_week_identifier()
     # Idempotencia local: si la semana ya tiene >=50 reales, saltar (a menos que --force)
     if not getattr(args, "force", False):
@@ -1766,7 +1754,7 @@ def _main_inner(argv: Optional[List[str]] = None) -> int:
                 log.warning("Usando --headless explicito: en headless Google muestra captcha. Si falla, corre sin --headless.")
             else:
                 log.info("Modo ventana (headed) por defecto: en ventana no sale captcha, en headless si. Usa --headless solo si lo necesitas.")
-            csv_path = asyncio.run(download_youtube_charts(chart=args.chart, country=args.country, show_browser=_effective_show_browser, use_chrome=args.use_chrome, keep_profile=not args.no_profile, terminal_mode=getattr(args, 'terminal', False)))
+            csv_path = asyncio.run(download_youtube_charts(chart=args.chart, country=args.country, show_browser=_effective_show_browser, use_chrome=args.use_chrome, keep_profile=not args.no_profile))
         except Exception as e:
             log.error("Error en descarga Playwright: %s", e, exc_info=True)
             csv_path = None
@@ -1845,22 +1833,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             open_folder_local(ARCHIVE_DIR)
         except Exception:
             pass
-    # --pause: SOLO en local manual. NUNCA en GitHub ni en --terminal.
-    # En GitHub no hay humano para presionar Enter: si pausamos, el workflow
-    # se queda colgado en "Presiona Enter..." hasta timeout. Por eso:
-    # - Si viene --terminal, NO pausar aunque no haya tty.
-    # - Si GITHUB_ACTIONS=true, NO pausar aunque venga --pause o no haya tty.
-    # - En local manual, pausar si viene --pause o si no hay tty (doble clic).
-    import os as _os_w
-    _is_ci = _os_w.environ.get("GITHUB_ACTIONS") == "true" or "--terminal" in args_list
-    if _is_ci:
-        should_pause = False
-    else:
-        try:
-            _has_tty = sys.stdin.isatty()
-        except Exception:
-            _has_tty = False
-        should_pause = "--pause" in args_list or (not _has_tty)
+    # --pause o doble clic en Windows (sin tty) -> no cerrar la ventana de golpe
+    # En Linux tambien: si lo abres con doble clic desde el gestor de archivos no hay tty
+    # y la ventana se cerraria sin ver el resultado. Por eso pausa si no hay tty en cualquier SO.
+    try:
+        _has_tty = sys.stdin.isatty()
+    except Exception:
+        _has_tty = False
+    should_pause = "--pause" in args_list or (not _has_tty)
     if should_pause:
         try:
             input("\nPresiona Enter para cerrar...")
