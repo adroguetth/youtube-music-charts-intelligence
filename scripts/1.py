@@ -22,6 +22,7 @@ Diferencias clave vs la version para CI:
 - Zona horaria local America/Santiago por defecto en PC local.
 - Logs en logs/scraper_YYYY-MM-DD.log ademas de pantalla.
 - --show-browser para ver el navegador y resolver captcha a mano si aparece.
+    ap.add_argument("--headless", action="store_true", help="Forzar modo sin ventana (NO recomendado: en headless Google muestra captcha)")
 - --pause para que la ventana no se cierre al hacer doble clic.
 - --open-folder para abrir la carpeta con el CSV y la DB al terminar.
 - Detecta si lo corres por error en GitHub Actions y avisa.
@@ -120,9 +121,7 @@ log = logging.getLogger("youtube_charts")
 # CONSTANTS AND DIRECTORIES - sin efectos al importar
 # ---------------------------------------------------------------------------
 try:
-    # Si 1.py esta en scripts/, la raiz es parent.parent (youtube-music-charts-intelligence)
-    _BASE_RAW = Path(__file__).resolve().parent
-    BASE_DIR = _BASE_RAW.parent if _BASE_RAW.name == "scripts" else _BASE_RAW
+    BASE_DIR = Path(__file__).resolve().parent
 except NameError:
     BASE_DIR = Path.cwd()
 
@@ -914,12 +913,11 @@ def download_via_http(chart: str = "TopSongs", country: str = "global") -> Optio
 # ---------------------------------------------------------------------------
 # PLAYWRIGHT - ESTRATEGIA PRINCIPAL: DOM + RED + BOTON (en ese orden)
 # ---------------------------------------------------------------------------
-_JS_EXTRACT_DOM = r"""
+_JS_EXTRACT_DOM = r'''
 () => {
   const rows = [];
   const seen = new Set();
   function getText(el) { return (el.innerText || el.textContent || '').trim(); }
-  // Recorre TODO el arbol, incluyendo cada shadowRoot, y junta todos los elementos
   function collectAll(root, out) {
     if (!root || !root.querySelectorAll) return;
     const all = root.querySelectorAll('*');
@@ -930,7 +928,6 @@ _JS_EXTRACT_DOM = r"""
   }
   const allEls = [];
   collectAll(document, allEls);
-  // 1) Tablas clasicas (light DOM, por si alguna vez vuelve)
   const tableRows = document.querySelectorAll('table tbody tr');
   if (tableRows.length >= 20) {
     tableRows.forEach((tr, idx) => {
@@ -943,8 +940,6 @@ _JS_EXTRACT_DOM = r"""
     });
     if (rows.length >= 20) return rows;
   }
-  // 2) Polymer: buscar contenedores de fila por tag/clase, no solo <a>
-  // Charts 2026 usa <ytmc-chart-row> / [class*="chart"] / [class*="row"] dentro de shadow DOM
   const rowCands = allEls.filter(el => {
     const tag = (el.tagName || '').toLowerCase();
     const cls = (el.className || '').toString().toLowerCase();
@@ -954,7 +949,6 @@ _JS_EXTRACT_DOM = r"""
     const txt = getText(rowEl);
     if (!txt || txt.length < 10 || txt.length > 500) continue;
     const lines = txt.split('\n').map(s => s.trim()).filter(Boolean);
-    // Esperado: [rank, title, artist, views...] o [rank, title, artist, lastWeek, weeks, views]
     if (lines.length < 3) continue;
     let rank = parseInt(lines[0], 10);
     if (isNaN(rank) || rank < 1 || rank > 200) {
@@ -973,7 +967,6 @@ _JS_EXTRACT_DOM = r"""
       const mm = href.match(/v=([A-Za-z0-9_-]{11})/) || href.match(/youtu\.be\/([A-Za-z0-9_-]{11})/);
       if (mm) vid = mm[1];
     }
-    // titulo = primera linea no numerica larga, artista = siguiente, views = linea con numero + K/M o "views"
     let title = '', artist = '', viewsRaw = '';
     const nonRank = lines.filter(l => !/^\d+$/.test(l));
     if (nonRank.length >= 1) title = nonRank[0];
@@ -988,7 +981,6 @@ _JS_EXTRACT_DOM = r"""
     rows.sort((a,b) => a.Rank - b.Rank);
     return rows;
   }
-  // 3) Fallback generico: cada link que parece video/cancion es una fila (como antes, pero con allEls que ya atraviesa shadow)
   for (const el of allEls) {
     if (el.tagName !== 'A') continue;
     const href = el.getAttribute('href') || '';
@@ -1015,7 +1007,7 @@ _JS_EXTRACT_DOM = r"""
   }
   return rows;
 }
-"""
+'''
 
 
 
@@ -1023,20 +1015,8 @@ async def _extract_via_dom(page) -> List[Dict[str, Any]]:
     try:
         # Diagnostico extra: cuantos links hay en total
         try:
-            _diag = await page.evaluate("""() => {
-                // Contar links atravesando shadow DOM, no solo document.querySelectorAll('a') que da 0 en Polymer
-                let links = 0;
-                function walk(root) {
-                    if (!root || !root.querySelectorAll) return;
-                    links += root.querySelectorAll('a').length;
-                    const els = root.querySelectorAll('*');
-                    for (const el of els) { if (el.shadowRoot) walk(el.shadowRoot); }
-                }
-                walk(document);
-                // bodyLen desde shadow text limpio, no body.innerText que en Polymer es 0
-                return {links: links, bodyLen: document.body ? document.body.innerText.length : 0, title: document.title, shadowRoots: document.querySelectorAll('*').length };
-            }""")
-            log.info("Diagnostico DOM: links_shadow=%s bodyLen_light=%s title=%s total_els=%s", _diag.get('links'), _diag.get('bodyLen'), _diag.get('title'), _diag.get('shadowRoots'))
+            _diag = await page.evaluate("() => { let links=0; function walk(r){ if(!r||!r.querySelectorAll) return; links+=r.querySelectorAll('a').length; const els=r.querySelectorAll('*'); for(const el of els){ if(el.shadowRoot) walk(el.shadowRoot); } } walk(document); return {links: links, bodyLen: document.body ? document.body.innerText.length : 0, title: document.title }; }")
+            log.info("Diagnostico DOM: links_shadow=%s bodyLen_light=%s title=%s", _diag.get('links'), _diag.get('bodyLen'), _diag.get('title'))
         except Exception:
             pass
         data = await page.evaluate(_JS_EXTRACT_DOM)
@@ -1179,11 +1159,13 @@ def _extract_rows_from_youtubei_json(data: Any) -> List[Dict[str, Any]]:
 
 
 async def _try_youtubei_browse(page, chart: str = "TopSongs", country: str = "global") -> List[Dict[str, Any]]:
-    """Charts NO usa youtubei/v1/browse con FEmusic_charts: siempre da 404 (visto en CI 2026-11-18). Se omite sin hacer POST para no contaminar el log. El dato real viene del Polymer app, no de youtubei."""
     log.info("youtubei: omitido - Charts no usa youtubei/v1/browse (404 esperado), se usa DOM/shadow")
     return []
+
+
+
 async def _extract_via_inner_text(page) -> List[Dict[str, Any]]:
-    """Fallback: parsea shadow text limpio como tabla. Antes usaba body.innerText que en Polymer es 0 siempre."""
+    """Fallback: parsea body.innerText como tabla. No inventa, solo si hay estructura rank+titulo+artista+vistas."""
     try:
         text = await _get_page_text_with_shadow(page)
     except Exception as e:
@@ -1258,13 +1240,13 @@ async def _get_page_text_with_shadow(page) -> str:
         txt = await page.evaluate("""() => {
             let out = [];
             function isIgnorable(node) {
-                // No contar CSS/JS como "texto de pagina": era lo que inflaba shadow_text_len a 622k con CSS
                 if (!node || !node.parentElement) return false;
                 const tag = (node.parentElement.tagName || '').toUpperCase();
                 return tag === 'STYLE' || tag === 'SCRIPT' || tag === 'NOSCRIPT' || tag === 'TEMPLATE' || tag === 'HEAD';
             }
             function walk(root) {
                 if (!root) return;
+                // Texto directo de este root
                 try {
                     const iter = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
                     let n;
@@ -1274,15 +1256,18 @@ async def _get_page_text_with_shadow(page) -> str:
                         if (v) out.push(v);
                     }
                 } catch(e) {}
+                // Recorrer elementos y sus shadowRoot
                 const els = root.querySelectorAll ? root.querySelectorAll('*') : [];
                 for (const el of els) {
                     if (el.shadowRoot) walk(el.shadowRoot);
                 }
+                // Tambien shadowRoot del documentElement
                 if (root === document && document.documentElement && document.documentElement.shadowRoot) {
                     walk(document.documentElement.shadowRoot);
                 }
             }
             walk(document);
+            // Tambien body.innerText como fallback
             if (document.body && document.body.innerText) out.push(document.body.innerText);
             return out.join('\\n');
         }""")
@@ -1347,7 +1332,10 @@ async def _wait_for_captcha_resolution(page, url: str, show_browser: bool, max_w
         pass
     log.warning("CAPTCHA DETECTADO en %s", url)
     if show_browser:
-        log.warning("Resuelve el CAPTCHA a mano en la ventana de Chrome que esta abierta." if not terminal_mode else "Captcha en --terminal / GitHub: no hay humano para resolverlo, se esperara solo 20s y se seguira con youtubei directo.")
+        if terminal_mode:
+            log.warning("Captcha en --terminal / GitHub: no hay humano para resolverlo, se esperara solo %d s y se seguira con DOM/shadow.", max_wait)
+        else:
+            log.warning("Resuelve el CAPTCHA a mano en la ventana de Chrome que esta abierta.")
         log.warning("Tienes %d segundos. El scraper esperara a que el chart aparezca, no necesitas presionar nada en la terminal.", max_wait)
         log.warning("Tip: si lo resuelves una vez con tu perfil persistente (.browser-profile), Google confia en ese perfil y la proxima vez casi no sale.")
     else:
@@ -1391,8 +1379,18 @@ async def download_youtube_charts(chart: str = "TopSongs", country: str = "globa
         browser = None
         context = None
         try:
-            # Headed por defecto en local: show_browser=True significa ventana. headless solo si show_browser=False.
+            # CORRECCION 2026-11-18: --terminal NO significa headless. --terminal = no interactivo (sin input).
+            # En CI con xvfb-run -a hay DISPLAY, entonces --terminal debe correr HEADED (headless=False) para que Google no muestre captcha.
             headless = not show_browser
+            if terminal_mode and (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+                if headless:
+                    log.info("Modo TERMINAL + DISPLAY=%s detectado (xvfb): forzando HEADED (headless=False) aunque show_browser=False. --terminal no es headless.", os.environ.get("DISPLAY"))
+                    headless = False
+                    show_browser = True
+                else:
+                    log.info("Modo TERMINAL + DISPLAY=%s (xvfb): HEADED, no headless. Asi Google no muestra captcha.", os.environ.get("DISPLAY"))
+            elif terminal_mode and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+                log.warning("Modo TERMINAL sin DISPLAY (sin xvfb): se usara headless=True, captcha muy probable. En CI usa xvfb-run -a.")
             # En Linux sin entorno grafico (servidor sin X / Wayland) no se puede mostrar navegador
             if show_browser and IS_LINUX and not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
                 log.warning("Pediste --show-browser pero no hay DISPLAY ni WAYLAND_DISPLAY (Linux sin GUI). Se usara headless=True.")
@@ -1417,7 +1415,6 @@ async def download_youtube_charts(chart: str = "TopSongs", country: str = "globa
                     args=browser_args,
                     viewport={"width": 1920, "height": 1080},
                     user_agent=(
-                        # En CI/Linux usar UA Linux: Windows UA en runner Linux es senal de bot
                         "Mozilla/5.0 (X11; Linux x86_64) "
                         "AppleWebKit/537.36 (KHTML, like Gecko) "
                         "Chrome/131.0.0.0 Safari/537.36"
@@ -1452,7 +1449,6 @@ async def download_youtube_charts(chart: str = "TopSongs", country: str = "globa
                     accept_downloads=True,
                     viewport={"width": 1920, "height": 1080},
                     user_agent=(
-                        # En CI/Linux usar UA Linux: Windows UA en runner Linux es senal de bot
                         "Mozilla/5.0 (X11; Linux x86_64) "
                         "AppleWebKit/537.36 (KHTML, like Gecko) "
                         "Chrome/131.0.0.0 Safari/537.36"
@@ -1469,6 +1465,38 @@ async def download_youtube_charts(chart: str = "TopSongs", country: str = "globa
                         "Referer": "https://charts.youtube.com/",
                     },
                 )
+            try:
+                _cookies_raw = os.environ.get("YOUTUBE_COOKIES", "").strip()
+                if _cookies_raw:
+                    log.info("YOUTUBE_COOKIES presente (%d chars), intentando inyectar cookies", len(_cookies_raw))
+                    try:
+                        import json as _js
+                        _parsed = _js.loads(_cookies_raw)
+                        if isinstance(_parsed, list) and _parsed:
+                            await context.add_cookies(_parsed)
+                            log.info("Cookies JSON inyectadas: %d", len(_parsed))
+                        elif isinstance(_parsed, dict) and _parsed:
+                            _clist = [{"name": k, "value": str(v), "domain": ".youtube.com", "path": "/"} for k, v in _parsed.items()]
+                            await context.add_cookies(_clist)
+                            log.info("Cookies dict inyectadas: %d", len(_clist))
+                        else:
+                            raise ValueError("formato JSON no reconocido")
+                    except Exception as _e:
+                        try:
+                            _pairs = [p.strip() for p in _cookies_raw.split(";") if "=" in p]
+                            _clist2 = []
+                            for _pr in _pairs:
+                                _k, _v = _pr.split("=", 1)
+                                _clist2.append({"name": _k.strip(), "value": _v.strip(), "domain": ".youtube.com", "path": "/"})
+                            if _clist2:
+                                await context.add_cookies(_clist2)
+                                log.info("Cookies string cruda inyectadas: %d", len(_clist2))
+                        except Exception as _e2:
+                            log.warning("YOUTUBE_COOKIES no se pudo parsear, se sigue sin cookies: %s / %s", _e, _e2)
+                else:
+                    log.info("YOUTUBE_COOKIES vacio o no configurado: se sigue sin cookies (en CI sin cookies el captcha es mas probable)")
+            except Exception as _e:
+                log.warning("Inyeccion de cookies fallo (ignorado): %s", _e)
             await context.add_init_script(
                 """
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
@@ -1522,7 +1550,6 @@ async def download_youtube_charts(chart: str = "TopSongs", country: str = "globa
                 log.info("Navegando a %s", url)
                 try:
                     try:
-                        # networkidle espera a que el Polymer app termine sus XHR. domcontentloaded solo espera el shell HTML.
                         await page.goto(url, wait_until="networkidle", timeout=90_000)
                     except Exception as e:
                         log.info("goto networkidle fallo, reintento domcontentloaded: %s", e)
@@ -1531,21 +1558,19 @@ async def download_youtube_charts(chart: str = "TopSongs", country: str = "globa
                         except Exception as e2:
                             log.info("goto domcontentloaded fallo, sigo: %s", e2)
                     await page.wait_for_timeout(8000)
-                    # Esperar a que el Polymer app hidrate: ytmc-v2-app + texto de chart, con poll hasta 45s (en CI la CPU es lenta)
                     try:
-                        await page.wait_for_selector("ytmc-v2-app", timeout=30_000)
-                        log.info("Polymer ytmc-v2-app encontrado, esperando chart...")
+                        await page.wait_for_selector("ytmc-v2-app", state="attached", timeout=30_000)
+                        log.info("Polymer ytmc-v2-app adjunto, esperando chart...")
                     except Exception as e:
                         log.info("ytmc-v2-app no aparecio en 30s: %s", e)
-                    # Poll: cada 3s chequear si ya hay texto de chart en shadow DOM
                     for _poll in range(15):
                         try:
                             _poll_txt = await _get_page_text_with_shadow(page)
                             if "Weekly Top Songs" in _poll_txt and "Weekly views" in _poll_txt:
                                 log.info("Poll chart: chart visible en shadow tras %ds", (_poll+1)*3)
                                 break
-                            if "Select all images" in _poll_txt:
-                                log.info("Poll chart: aparece captcha visible, se dejara a _wait_for_captcha_resolution")
+                            if "Select all images" in _poll_txt or "I'm not a robot" in _poll_txt:
+                                log.info("Poll chart: aparece captcha visible")
                                 break
                         except Exception:
                             pass
@@ -1555,8 +1580,7 @@ async def download_youtube_charts(chart: str = "TopSongs", country: str = "globa
                         await _wait_for_captcha_resolution(page, url, show_browser, max_wait=(20 if terminal_mode else 180), terminal_mode=terminal_mode)
                     except Exception as e:
                         log.info("Espera captcha fallo: %s", e)
-                    # Espera por contenido real en shadow DOM: get_by_text NO ve shadow DOM en Polymer, por eso daba 0 aunque la pagina tenia 1.3MB
-                    # Ya se hizo poll arriba con _get_page_text_with_shadow, este es solo log extra
+                    # Ya se hizo poll con shadow text arriba (get_by_text NO ve shadow DOM en Polymer)
                     try:
                         _chk = await _get_page_text_with_shadow(page)
                         log.info("Check shadow post-poll: len=%d tiene_chart=%s", len(_chk), ("Weekly Top Songs" in _chk))
@@ -1712,14 +1736,14 @@ def _main_inner(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--use-chrome", action="store_true", help="LOCAL: usa tu Google Chrome instalado en vez de Chromium descargado. Menos deteccion de bot.")
     parser.add_argument("--no-profile", action="store_true", help="LOCAL: no usa perfil persistente .browser-profile/, usa perfil temporal limpio.")
     parser.add_argument("--open-folder", action="store_true", help="LOCAL: al terminar abre la carpeta con el CSV y la DB en el explorador.")
-    parser.add_argument("--terminal", action="store_true", help="Modo terminal puro: sin ventana, sin xvfb, sin --show-browser. Usa headless=new + stealth. Ideal para cron.")
     parser.add_argument("--force", action="store_true", help="Re-scrapear aunque la semana ya tenga datos.")
     parser.add_argument("--pause", action="store_true", help="LOCAL: al terminar espera Enter antes de cerrar. Ideal para doble clic, si no la ventana se cierra y no ves el resultado.")
+    parser.add_argument("--terminal", action="store_true", help="CI / TERMINAL: no interactivo, nunca espera Enter, nunca espera captcha manual. NO significa headless: con xvfb-run -a corre HEADED.")
     args = parser.parse_args(argv)
 
     print("\n" + "=" * 70)
     print("YOUTUBE CHARTS - EXTRACTOR LOCAL PC (100 canciones)")
-    print("Modo: PC LOCAL LINUX - no GitHub Actions, no Windows")
+    print('Modo: PC LOCAL LINUX - terminal=' + str(args.terminal) + ' headless=' + str(args.headless) + ' DISPLAY=' + str(__import__('os').environ.get('DISPLAY', '(sin DISPLAY)')))
     print(f"Chart: {args.chart} / Pais: {args.country}")
     print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
@@ -1731,16 +1755,6 @@ def _main_inner(argv: Optional[List[str]] = None) -> int:
     else:
         log.info('Modo PC LOCAL Linux - Linux=%s, perfil persistente=%s, zona=%s, DISPLAY=%s', IS_LINUX, not args.no_profile, LOCAL_TIMEZONE, os.environ.get('DISPLAY', '(sin DISPLAY)'))
 
-    # Modo terminal: fuerza headless, sin ventana, sin pausa
-    if getattr(args, "terminal", False):
-        args.headless = True
-        if getattr(args, "show_browser", False):
-            log.info("Modo --terminal: ignorando --show-browser (en terminal no hay ventana).")
-            args.show_browser = False
-        if getattr(args, "pause", False):
-            log.info("Modo --terminal: ignorando --pause.")
-            args.pause = False
-        log.info("Modo TERMINAL: sin ventana, sin xvfb. headless=new + stealth + perfil persistente. Sin pausa, sin input(), sin esperar humano.")
     week_id = args.week or get_week_identifier()
     # Idempotencia local: si la semana ya tiene >=50 reales, saltar (a menos que --force)
     if not getattr(args, "force", False):
@@ -1777,15 +1791,24 @@ def _main_inner(argv: Optional[List[str]] = None) -> int:
 
     if playwright_ready:
         try:
-            # En LOCAL, headed por defecto: tu descubrimiento es correcto, en ventana no sale captcha, en headless si.
-            # Por eso: si no pasas --headless, usamos ventana aunque no pases --show-browser.
-            # --headless es solo para quien lo pide explicito.
-            _effective_show_browser = not args.headless
+            # CORRECCION 2026-11-18: --terminal NO es --headless.
+            # --terminal = no interactivo (sin input, captcha max 20s).
+            # --headless = forzar sin ventana (captcha casi seguro).
+            # En CI: xvfb-run -a + --terminal => DISPLAY existe => HEADED, sin captcha.
             if args.headless:
+                _effective_show_browser = False
                 log.warning("Usando --headless explicito: en headless Google muestra captcha. Si falla, corre sin --headless.")
+            elif args.terminal:
+                _has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+                _effective_show_browser = _has_display
+                if _has_display:
+                    log.info("Modo TERMINAL + DISPLAY=%s (xvfb): HEADED. --terminal no es headless, asi no sale captcha.", os.environ.get("DISPLAY"))
+                else:
+                    log.warning("Modo TERMINAL sin DISPLAY (sin xvfb): headless forzado, captcha probable. En CI usa xvfb-run -a.")
             else:
+                _effective_show_browser = True
                 log.info("Modo ventana (headed) por defecto: en ventana no sale captcha, en headless si. Usa --headless solo si lo necesitas.")
-            csv_path = asyncio.run(download_youtube_charts(chart=args.chart, country=args.country, show_browser=_effective_show_browser, use_chrome=args.use_chrome, keep_profile=not args.no_profile, terminal_mode=getattr(args, 'terminal', False)))
+            csv_path = asyncio.run(download_youtube_charts(chart=args.chart, country=args.country, show_browser=_effective_show_browser, use_chrome=args.use_chrome, keep_profile=not args.no_profile, terminal_mode=args.terminal))
         except Exception as e:
             log.error("Error en descarga Playwright: %s", e, exc_info=True)
             csv_path = None
@@ -1864,14 +1887,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             open_folder_local(ARCHIVE_DIR)
         except Exception:
             pass
-    # --pause: SOLO en local manual. NUNCA en GitHub ni en --terminal.
-    # En GitHub no hay humano para presionar Enter: si pausamos, el workflow
-    # se queda colgado en "Presiona Enter..." hasta timeout. Por eso:
-    # - Si viene --terminal, NO pausar aunque no haya tty.
-    # - Si GITHUB_ACTIONS=true, NO pausar aunque venga --pause o no haya tty.
-    # - En local manual, pausar si viene --pause o si no hay tty (doble clic).
-    import os as _os_w
-    _is_ci = _os_w.environ.get("GITHUB_ACTIONS") == "true" or "--terminal" in args_list
+    # --pause o doble clic en Windows (sin tty) -> no cerrar la ventana de golpe
+    # En Linux tambien: si lo abres con doble clic desde el gestor de archivos no hay tty
+    # y la ventana se cerraria sin ver el resultado. Por eso pausa si no hay tty en cualquier SO.
+    _is_ci = os.environ.get("GITHUB_ACTIONS") == "true" or "--terminal" in args_list
     if _is_ci:
         should_pause = False
     else:
