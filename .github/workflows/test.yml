@@ -1,77 +1,105 @@
-name: YouTube Charts - SOLO PRUEBAS
+name: YouTube Charts - scrape semanal (runner propio)
 
-# SOLO PRUEBAS: repo youtube-music-charts-intelligence
-# 1.py esta en scripts/
-# Workflow en .github/workflows/test.yml
-# No hay schedule, no hay auto-commit, no hay push.
+# Guardar como .github/workflows/charts-scrape.yml
+#
+# Por que runner propio: en runners hospedados por GitHub (IP de datacenter
+# Azure) reCAPTCHA Enterprise muestra captcha aunque el navegador sea headed.
+# En tu equipo (IP residencial, Chrome real, perfil con historial) no sale.
+#
+# Requisitos en el equipo del runner (una sola vez, ver instrucciones):
+#   - Google Chrome estable, xvfb y python3-venv instalados
+#   - Runner self-hosted registrado con la etiqueta "ytcharts", como servicio
+#   - Perfil "calentado": una corrida manual en ventana con
+#     YOUTUBE_PROFILE_DIR=$HOME/ytcharts/profile (resolviendo el captcha si sale)
+#
+# Seguridad: un runner propio ejecuta el codigo del repo en TU equipo. Este
+# workflow solo corre por schedule o manualmente (nunca por pull_request).
 
 on:
+  schedule:
+    - cron: '0 15 * * 6'   # sabados 15:00 UTC; ajusta al dia en que YouTube publica
   workflow_dispatch:
     inputs:
       chart:
-        description: 'Chart a probar'
+        description: 'Chart'
         required: false
         default: 'TopSongs'
       country:
-        description: 'Pais a probar'
+        description: 'Pais'
         required: false
         default: 'global'
+      commit:
+        description: 'Hacer commit de CSV y bases al repo'
+        type: boolean
+        default: false
 
 permissions:
-  contents: read
+  contents: write
+
+# Un solo scrape a la vez: el perfil de Chrome no admite dos procesos.
+concurrency:
+  group: ytcharts-scrape
+  cancel-in-progress: false
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+  scrape:
+    runs-on: [self-hosted, linux, ytcharts]
+    timeout-minutes: 20
     steps:
-      - name: Checkout (solo lectura, modo pruebas)
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install xvfb (DISPLAY virtual para que Chrome crea que hay ventana)
+      - name: Preparar entorno (venv y perfil FUERA del workspace)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb
+          set -euo pipefail
+          # checkout hace git clean -ffdx: nada importante puede vivir en el workspace
+          mkdir -p "$HOME/ytcharts/profile"
+          [ -x "$HOME/ytcharts/venv/bin/python" ] || python3 -m venv "$HOME/ytcharts/venv"
+          "$HOME/ytcharts/venv/bin/pip" install -q --upgrade pip
+          "$HOME/ytcharts/venv/bin/pip" install -q -r requirements-ci.txt
+          command -v xvfb-run >/dev/null || { echo "ERROR: falta xvfb (sudo apt install xvfb)"; exit 1; }
+          if ! command -v google-chrome >/dev/null && ! command -v google-chrome-stable >/dev/null; then
+            echo "ERROR: falta Google Chrome estable en el equipo del runner"; exit 1
+          fi
 
-      - name: Install deps (SOLO requirements-ci.txt, NO requirements.txt completo)
-        run: |
-          python -m pip install --upgrade pip
-          # 1.py solo necesita playwright. requirements.txt completo instala ~50 paquetes (openai, groq, selenium, jupyter, scipy...) y pip hace backtracking con google-api-core.
-          # Por eso en CI NUNCA usar requirements.txt.
-          test -f requirements-ci.txt || (echo "ERROR: falta requirements-ci.txt en la raiz, subelo" && exit 1)
-          pip install -r requirements-ci.txt
-          python -m playwright install --with-deps chromium
-
-      - name: Verificar que 1.py tiene --terminal
-        run: |
-          python3 scripts/1.py --help | grep -q "\-\-terminal" && echo "OK: 1.py tiene --terminal" || (echo "ERROR: 1.py viejo sin --terminal, sube el 1.py nuevo a scripts/1.py" && exit 1)
-          grep -q "Modo TERMINAL + DISPLAY" scripts/1.py && echo "OK: 1.py nuevo, --terminal NO es headless" || (echo "ERROR: 1.py viejo donde --terminal = headless, sube el 1.py nuevo" && exit 1)
-          echo "DISPLAY en CI (sin xvfb aun): [$DISPLAY]"
-
-      - name: Test scraper en MODO TERMINAL
+      - name: Scrapear chart
         env:
-          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+          CHART: ${{ inputs.chart || 'TopSongs' }}
+          COUNTRY: ${{ inputs.country || 'global' }}
         run: |
-          # 1.py ahora vive en scripts/
-          # xvfb-run -a OBLIGATORIO en CI: sin DISPLAY, headless puro -> Polymer no hidrata -> links=0 / bodyLen=0
-          xvfb-run -a python3 scripts/1.py --terminal --use-chrome --country ${{ inputs.country }} --chart ${{ inputs.chart }} --force
-          echo "--- RESULTADO PRUEBA ---"
-          ls -lh charts_archive/1_download-chart/latest_chart.csv || ls -lh *.csv || echo "NO se genero CSV"
-          wc -l charts_archive/1_download-chart/latest_chart.csv || true
-          head -n 5 charts_archive/1_download-chart/latest_chart.csv || true
+          export YOUTUBE_PROFILE_DIR="$HOME/ytcharts/profile"
+          # Pantalla virtual 1920x1080x24: Chrome corre HEADED (no headless)
+          xvfb-run -a -s "-screen 0 1920x1080x24" \
+            "$HOME/ytcharts/venv/bin/python" scripts/1.py \
+              --terminal --use-chrome --force \
+              --chart "$CHART" --country "$COUNTRY"
+          echo "--- RESULTADO ---"
+          ls -lh charts_archive/1_download-chart/latest_chart.csv
+          wc -l charts_archive/1_download-chart/latest_chart.csv
+          head -n 5 charts_archive/1_download-chart/latest_chart.csv
 
-      - name: Subir CSV + log como artifact (no commit)
+      - name: Subir CSV + logs (incluye screenshots de debug si fallo)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-chart-${{ github.run_id }}
+          name: chart-${{ github.run_id }}
           path: |
             charts_archive/1_download-chart/latest_chart.csv
             logs/
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 14
+
+      - name: Commit de datos
+        if: success() && (github.event_name == 'schedule' || inputs.commit == true)
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Si databases/ esta en .gitignore, git add avisa y se ignora (|| true)
+          git add charts_archive/1_download-chart/latest_chart.csv charts_archive/1_download-chart/databases || true
+          if git diff --cached --quiet; then
+            echo "Sin cambios que commitear"
+          else
+            git commit -m "data: chart semanal $(date -u +%G-W%V)"
+            git push
+          fi
