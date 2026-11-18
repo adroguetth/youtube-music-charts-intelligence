@@ -1694,6 +1694,7 @@ def _main_inner(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--use-chrome", action="store_true", help="LOCAL: usa tu Google Chrome instalado en vez de Chromium descargado. Menos deteccion de bot.")
     parser.add_argument("--no-profile", action="store_true", help="LOCAL: no usa perfil persistente .browser-profile/, usa perfil temporal limpio.")
     parser.add_argument("--open-folder", action="store_true", help="LOCAL: al terminar abre la carpeta con el CSV y la DB en el explorador.")
+    parser.add_argument("--terminal", action="store_true", help="Modo terminal puro: sin ventana, sin xvfb, sin --show-browser. Usa headless=new + stealth. Ideal para cron.")
     parser.add_argument("--force", action="store_true", help="Re-scrapear aunque la semana ya tenga datos.")
     parser.add_argument("--pause", action="store_true", help="LOCAL: al terminar espera Enter antes de cerrar. Ideal para doble clic, si no la ventana se cierra y no ves el resultado.")
     args = parser.parse_args(argv)
@@ -1712,6 +1713,16 @@ def _main_inner(argv: Optional[List[str]] = None) -> int:
     else:
         log.info('Modo PC LOCAL Linux - Linux=%s, perfil persistente=%s, zona=%s, DISPLAY=%s', IS_LINUX, not args.no_profile, LOCAL_TIMEZONE, os.environ.get('DISPLAY', '(sin DISPLAY)'))
 
+    # Modo terminal: fuerza headless, sin ventana, sin pausa
+    if getattr(args, "terminal", False):
+        args.headless = True
+        if getattr(args, "show_browser", False):
+            log.info("Modo --terminal: ignorando --show-browser (en terminal no hay ventana).")
+            args.show_browser = False
+        if getattr(args, "pause", False):
+            log.info("Modo --terminal: ignorando --pause.")
+            args.pause = False
+        log.info("Modo TERMINAL: sin ventana, sin xvfb. headless=new + stealth + perfil persistente.")
     week_id = args.week or get_week_identifier()
     # Idempotencia local: si la semana ya tiene >=50 reales, saltar (a menos que --force)
     if not getattr(args, "force", False):
