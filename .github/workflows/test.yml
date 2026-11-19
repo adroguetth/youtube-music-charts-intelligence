@@ -29,7 +29,7 @@ jobs:
       - name: Run scraper
         run: |
           xvfb-run -a --server-args="-screen 0 1920x1080x24" \
-            python 1.py --terminal --wait 90 --min-rows 50
+            python scripts/1.py --terminal --wait 90 --min-rows 50
         # NOTA: NO uses --use-chrome en GitHub (no esta instalado).
         # NOTA: SIEMPRE con xvfb-run (si no, --terminal = headless = captcha).
 
