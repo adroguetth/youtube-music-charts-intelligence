@@ -1,48 +1,45 @@
-#!/usr/bin/env python3
 """
-YouTube Charts scraper (scripts/1.py) - v3
-==========================================
+YouTube Charts Data Scraper - v4 FINAL (GitHub Actions ready)
+=============================================================
 Descarga el chart semanal (TopSongs / global, 100 canciones) y lo guarda
 como CSV + SQLite. Si no puede obtener datos REALES sale con codigo 2 y no
 escribe nada en la DB (no hay datos sinteticos).
 
-Pensado para correr en un equipo PROPIO (tu PC o un runner self-hosted de
-GitHub Actions) con Google Chrome instalado, en modo ventana (headed) y con
-un perfil persistente. Los runners hospedados por GitHub usan IPs de
-datacenter que reCAPTCHA Enterprise puntua muy bajo, y esto no se arregla
-con cambios de codigo.
+Disenado para correr en GitHub Actions (ubuntu-latest) con xvfb-run.
+Tambien funciona en local con Chrome instalado.
 
-Que cambio respecto a la version anterior
------------------------------------------
-- BASE_DIR es la raiz del repo (no scripts/), asi CSV y logs quedan donde el
-  workflow los busca (charts_archive/ y logs/ en la raiz).
-- Ya NO fuerza user-agent, ni parchea navigator.plugins/languages, ni usa
-  --disable-gpu. Quita --enable-automation. Menos incoherencias = menos
-  puntaje de bot. Registra el user-agent real en el log para comprobarlo.
-- Perfil persistente en YOUTUBE_PROFILE_DIR (por defecto .browser-profile/).
-  En un runner self-hosted ponlo FUERA del workspace: actions/checkout
-  ejecuta git clean -ffdx y borraria el perfil.
-- --terminal = no interactivo (nunca espera Enter ni captcha manual).
-  NO significa headless. Headless solo con --headless explicito.
-- Falla rapido si hay captcha y no hay humano (CAPTCHA_GRACE_S).
-- Los rangos se renumeran 1..N tras deduplicar (antes podian quedar huecos).
-- Codigo muerto eliminado: youtubei (siempre 0), HTTP directo,
-  __NEXT_DATA__, innerText con regex mal escapada, fallback sintetico.
+Como se invoca
+--------------
+GitHub Actions (lo que usa el workflow):
+    xvfb-run -a --server-args="-screen 0 1920x1080x24" \\
+        python 1.py --terminal --wait 90 --min-rows 50
 
-Uso
----
-    python scripts/1.py --use-chrome                   # ventana, interactivo
-    xvfb-run -a -s "-screen 0 1920x1080x24" \\
-        python scripts/1.py --terminal --use-chrome --force   # CI / cron
+Local PC Linux (con escritorio, ventana visible):
+    python 1.py --show-browser --use-chrome --pause
 
-Variables de entorno opcionales
--------------------------------
-    YOUTUBE_PROFILE_DIR      carpeta del perfil persistente de Chrome
-    YOUTUBE_CHARTS_BASE_DIR  raiz de salida (charts_archive/, logs/)
-    YOUTUBE_TZ               zona horaria del navegador (vacio = la del sistema)
+Local PC Linux (sin escritorio, monitor virtual):
+    xvfb-run -a --server-args="-screen 0 1920x1080x24" \\
+        python 1.py --terminal
 
-Primera vez: corre una vez en ventana y, si sale captcha, resuelvelo a mano
-con el MISMO YOUTUBE_PROFILE_DIR que usara el workflow.
+Por que --terminal NO es --headless
+------------------------------------
+--terminal significa "no interactivo" (sin input(), sin esperar Enter,
+captcha maximo 20s). NO significa "sin ventana". Con xvfb-run -a hay
+DISPLAY, entonces Playwright corre en modo HEADED (con ventana virtual),
+que es lo que evita el captcha de Google. Si corres --terminal SIN
+xvfb-run y SIN DISPLAY, el script falla rapido con error claro (antes
+caia a headless silenciosamente y se comia el captcha).
+
+Que cambio respecto a v3
+------------------------
+- --terminal sin DISPLAY ahora falla con exit 1 y mensaje claro.
+- --use-chrome se ignora automaticamente si Chrome no esta instalado
+  (GitHub Actions no trae Chrome, solo Chromium de Playwright).
+- Codigo muerto de youtubei eliminado (Charts 2026 no lo usa).
+- Deteccion de captcha corregida para Polymer: usa texto de shadow DOM,
+  no body.innerText (que en Polymer siempre es 0 aunque el chart este
+  visible). Esto evita el falso positivo "captcha" cuando en realidad
+  el chart ya cargo.
 
 Codigos de salida: 0 ok, 1 error, 2 sin datos reales (captcha, bloqueo, etc.)
 """
@@ -52,14 +49,17 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import json
 import logging
 import os
+import platform
 import re
 import shutil
 import sqlite3
 import subprocess
 import sys
 import time
+import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -75,26 +75,30 @@ logging.basicConfig(
 log = logging.getLogger("youtube_charts")
 
 # ---------------------------------------------------------------------------
-# RUTAS Y CONSTANTES (sin efectos al importar)
+# CONSTANTS AND DIRECTORIES
 # ---------------------------------------------------------------------------
-SCRIPT_DIR = Path(__file__).resolve().parent
-BASE_DIR = SCRIPT_DIR.parent if SCRIPT_DIR.name == "scripts" else SCRIPT_DIR
+try:
+    BASE_DIR = Path(__file__).resolve().parent
+except NameError:
+    BASE_DIR = Path.cwd()
+
 if os.environ.get("YOUTUBE_CHARTS_BASE_DIR"):
     BASE_DIR = Path(os.environ["YOUTUBE_CHARTS_BASE_DIR"]).expanduser().resolve()
 
+IS_WINDOWS = platform.system() == "Windows"
+IS_MAC = platform.system() == "Darwin"
+IS_LINUX = platform.system() == "Linux"
+IS_GITHUB_ACTIONS = os.environ.get("GITHUB_ACTIONS") == "true"
+IS_LOCAL = not IS_GITHUB_ACTIONS
+
+LOCAL_TIMEZONE = "America/Santiago" if IS_LOCAL else "America/New_York"
+
+OUTPUT_DIR = BASE_DIR / "data"
 ARCHIVE_DIR = BASE_DIR / "charts_archive" / "1_download-chart"
 DATABASE_DIR = ARCHIVE_DIR / "databases"
 BACKUP_DIR = ARCHIVE_DIR / "backup"
 LOGS_DIR = BASE_DIR / "logs"
-PROFILE_DIR = Path(
-    os.environ.get("YOUTUBE_PROFILE_DIR") or (BASE_DIR / ".browser-profile")
-).expanduser().resolve()
-BROWSER_TZ = os.environ.get("YOUTUBE_TZ", "").strip()
-
-IS_LINUX = sys.platform.startswith("linux")
-IS_CI = os.environ.get("GITHUB_ACTIONS") == "true"
-
-CAPTCHA_GRACE_S = 15  # sin humano: si el captcha sigue tras N s, abortar
+BROWSER_PROFILE_DIR = BASE_DIR / ".browser-profile"
 
 CANONICAL_COLUMNS = [
     "Rank",
@@ -137,41 +141,26 @@ COLUMN_ALIASES = {
 
 
 def ensure_directories() -> None:
-    for p in (ARCHIVE_DIR, DATABASE_DIR, BACKUP_DIR, LOGS_DIR):
+    for p in [OUTPUT_DIR, ARCHIVE_DIR, DATABASE_DIR, BACKUP_DIR, LOGS_DIR]:
         p.mkdir(parents=True, exist_ok=True)
 
 
-def setup_file_logging() -> None:
+def setup_local_logging() -> None:
     try:
         LOGS_DIR.mkdir(parents=True, exist_ok=True)
         log_file = LOGS_DIR / f"scraper_{datetime.now().strftime('%Y-%m-%d')}.log"
         if not any(isinstance(h, logging.FileHandler) for h in log.handlers):
             fh = logging.FileHandler(log_file, encoding="utf-8")
             fh.setFormatter(
-                logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+                logging.Formatter(
+                    "%(asctime)s %(levelname)s %(message)s",
+                    datefmt="%Y-%m-%d %H:%M:%S",
+                )
             )
             log.addHandler(fh)
             log.info("Log en: %s", log_file)
     except Exception as e:
         log.warning("No se pudo crear log en archivo: %s", e)
-
-
-def open_folder(path: Path) -> None:
-    try:
-        opener = "open" if sys.platform == "darwin" else "xdg-open"
-        subprocess.Popen([opener, str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception as e:
-        log.warning("No se pudo abrir la carpeta %s: %s", path, e)
-
-
-def chrome_available() -> bool:
-    if not IS_LINUX:
-        return True
-    return bool(
-        shutil.which("google-chrome")
-        or shutil.which("google-chrome-stable")
-        or Path("/opt/google/chrome/chrome").exists()
-    )
 
 
 def has_display() -> bool:
@@ -180,11 +169,94 @@ def has_display() -> bool:
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
+def _chrome_available() -> bool:
+    """True si Google Chrome esta instalado (no Chromium de Playwright)."""
+    return bool(
+        shutil.which("google-chrome")
+        or shutil.which("google-chrome-stable")
+        or Path("/opt/google/chrome/chrome").exists()
+    )
+
+
+def get_browser_args() -> list:
+    args = [
+        "--disable-gpu",
+        "--disable-blink-features=AutomationControlled",
+        "--disable-features=IsolateOrigins,site-per-process",
+        "--window-size=1920,1080",
+        "--start-maximized",
+    ]
+    if IS_LINUX:
+        args.insert(0, "--no-sandbox")
+        args.insert(1, "--disable-dev-shm-usage")
+    elif not IS_WINDOWS:
+        args.insert(0, "--no-sandbox")
+        args.insert(1, "--disable-dev-shm-usage")
+    return args
+
+
+def open_folder_local(path: Path) -> None:
+    try:
+        p = str(Path(path).resolve())
+        log.info("Abriendo carpeta: %s", p)
+        if IS_LINUX:
+            subprocess.Popen(
+                ["xdg-open", p],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        elif IS_MAC:
+            subprocess.run(["open", p], check=False)
+        elif IS_WINDOWS:
+            os.startfile(p)  # type: ignore[attr-defined]
+        else:
+            subprocess.run(["xdg-open", p], check=False)
+    except Exception as e:
+        log.warning("No se pudo abrir la carpeta %s: %s", path, e)
+
+
 # ---------------------------------------------------------------------------
-# SEMANA Y URLS
+# DEPENDENCY MANAGEMENT
+# ---------------------------------------------------------------------------
+def install_playwright() -> bool:
+    log.info("Verificando Playwright...")
+    import importlib.util
+
+    if importlib.util.find_spec("playwright") is None:
+        log.error("Playwright no esta instalado en este venv.")
+        log.error("Activa tu venv y corre: pip install playwright pandas")
+        log.error("Luego: python -m playwright install chromium")
+        return False
+    log.info("Playwright esta instalado")
+
+    dry = subprocess.run(
+        [sys.executable, "-m", "playwright", "install", "--dry-run", "chromium"],
+        capture_output=True,
+        text=True,
+    )
+    if dry.returncode == 0:
+        log.info("Chromium ya esta instalado")
+        return True
+
+    log.info("Instalando Chromium...")
+    result = subprocess.run(
+        [sys.executable, "-m", "playwright", "install", "chromium"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        log.info("Chromium instalado")
+        return True
+    log.error("Error instalando Chromium: %s", result.stderr[-2000:])
+    return False
+
+
+# ---------------------------------------------------------------------------
+# WEEK IDENTIFIER
 # ---------------------------------------------------------------------------
 def get_week_identifier(date: Optional[datetime] = None) -> str:
-    date = date or datetime.now()
+    if date is None:
+        date = datetime.now()
     year, week_num, _ = date.isocalendar()
     return f"{year}-W{week_num:02d}"
 
@@ -192,19 +264,22 @@ def get_week_identifier(date: Optional[datetime] = None) -> str:
 def get_chart_urls(chart: str = "TopSongs", country: str = "global") -> List[str]:
     chart = chart.strip() or "TopSongs"
     country = country.strip() or "global"
-    base = f"https://charts.youtube.com/charts/{chart}/{country}"
-    return [base, base + "/weekly"]
+    return [
+        f"https://charts.youtube.com/charts/{chart}/{country}",
+        f"https://charts.youtube.com/charts/{chart}/{country}/weekly",
+    ]
 
 
 # ---------------------------------------------------------------------------
-# PARSING
+# PARSING HELPERS
 # ---------------------------------------------------------------------------
 def _clean_text(value: Any) -> str:
-    return "" if value is None else str(value).strip()
+    if value is None:
+        return ""
+    return str(value).strip()
 
 
 def _parse_views(value: Any) -> Optional[int]:
-    """'1,234,567', '5.2M', '1.1B', '850K' -> int. None si no se puede."""
     if value is None or value == "":
         return None
     if isinstance(value, (int, float)):
@@ -214,11 +289,11 @@ def _parse_views(value: Any) -> Optional[int]:
     if not s:
         return None
     mult = 1
-    if s[-1] in "Kk":
+    if s[-1] in ("K", "k"):
         mult, s = 1_000, s[:-1]
-    elif s[-1] in "Mm":
+    elif s[-1] in ("M", "m"):
         mult, s = 1_000_000, s[:-1]
-    elif s[-1] in "Bb":
+    elif s[-1] in ("B", "b"):
         mult, s = 1_000_000_000, s[:-1]
     try:
         return int(float(s) * mult)
@@ -271,10 +346,10 @@ def _normalize_row(raw: Dict[str, Any], rank_fallback: int = 0) -> Dict[str, Any
         out[col] = val if val is not None else ""
     for col in ("Track Name", "Artist Names", "Growth", "YouTube URL", "Views Raw"):
         out[col] = _clean_text(out.get(col))
-    if not out["YouTube URL"]:
-        vid = raw.get("videoId") or raw.get("video_id")
-        if vid:
-            out["YouTube URL"] = f"https://www.youtube.com/watch?v={vid}"
+    if not out["YouTube URL"] and raw.get("videoId"):
+        out["YouTube URL"] = f"https://www.youtube.com/watch?v={raw['videoId']}"
+    if not out["YouTube URL"] and raw.get("video_id"):
+        out["YouTube URL"] = f"https://www.youtube.com/watch?v={raw['video_id']}"
     return out
 
 
@@ -290,26 +365,52 @@ def save_rows_to_csv(rows: List[Dict[str, Any]], path: Path) -> Path:
 
 
 def _read_csv_normalized(csv_path: Path) -> List[Dict[str, Any]]:
-    for enc in ("utf-8-sig", "latin-1"):
+    rows: List[Dict[str, Any]] = []
+    for enc in ("utf-8", "utf-8-sig", "latin-1"):
         try:
             with open(csv_path, "r", encoding=enc, newline="") as f:
                 reader = csv.DictReader(f)
-                return [_normalize_row(raw, i + 1) for i, raw in enumerate(reader)]
+                if reader.fieldnames is None:
+                    return []
+                has_synth = any(
+                    (fn or "").strip().lower() in ("is_synthetic", "is-synthetic")
+                    for fn in reader.fieldnames
+                )
+                for i, raw in enumerate(reader):
+                    norm = _normalize_row(raw, i + 1)
+                    if has_synth:
+                        for k, v in raw.items():
+                            if str(k).strip().lower() in ("is_synthetic", "is-synthetic"):
+                                try:
+                                    norm["_is_synthetic"] = (
+                                        int(float(str(v)))
+                                        if str(v).strip() != ""
+                                        else 0
+                                    )
+                                except ValueError:
+                                    norm["_is_synthetic"] = (
+                                        1
+                                        if str(v).strip().lower()
+                                        in ("1", "true", "yes")
+                                        else 0
+                                    )
+                    rows.append(norm)
+            break
         except UnicodeDecodeError:
             continue
-    return []
+    return rows
 
 
 # ---------------------------------------------------------------------------
-# BACKUPS Y LIMPIEZA
+# BACKUP MANAGEMENT
 # ---------------------------------------------------------------------------
 def create_backup_before_update(week_id: str) -> Optional[Path]:
     db_path = DATABASE_DIR / f"youtube_charts_{week_id}.db"
     if not db_path.exists():
         return None
     ensure_directories()
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    backup_path = BACKUP_DIR / f"backup_{week_id}_{stamp}.db"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    backup_path = BACKUP_DIR / f"backup_{week_id}_{timestamp}.db"
     try:
         shutil.copy2(db_path, backup_path)
         log.info("Backup creado: %s", backup_path.name)
@@ -320,21 +421,23 @@ def create_backup_before_update(week_id: str) -> Optional[Path]:
 
 
 def cleanup_old_backups(days: int = 7) -> None:
+    log.info("Limpiando backups con mas de %d dias...", days)
     if not BACKUP_DIR.exists():
         return
-    cutoff = (datetime.now() - timedelta(days=days)).timestamp()
+    cutoff = datetime.now() - timedelta(days=days)
     deleted = 0
     for backup in BACKUP_DIR.glob("backup_*.db"):
         try:
-            if backup.stat().st_mtime < cutoff:
+            if backup.stat().st_mtime < cutoff.timestamp():
                 backup.unlink()
                 deleted += 1
         except Exception as e:
             log.warning("Error borrando %s: %s", backup.name, e)
-    log.info("Backups eliminados (>%d dias): %d", days, deleted)
+    log.info("Backups eliminados: %d", deleted)
 
 
 def cleanup_old_databases(weeks: int = 52) -> None:
+    log.info("Limpiando bases con mas de %d semanas...", weeks)
     if not DATABASE_DIR.exists():
         return
     cutoff = datetime.now() - timedelta(weeks=weeks)
@@ -343,39 +446,60 @@ def cleanup_old_databases(weeks: int = 52) -> None:
         try:
             week_id = db.stem.replace("youtube_charts_", "")
             year_str, week_str = week_id.split("-W")
-            if datetime.fromisocalendar(int(year_str), int(week_str), 1) < cutoff:
+            year, week = int(year_str), int(week_str)
+            db_date = datetime.fromisocalendar(year, week, 1)
+            if db_date < cutoff:
                 db.unlink()
                 deleted += 1
                 log.info("Eliminada: %s", db.name)
         except Exception as e:
             log.warning("Error procesando %s: %s", db.name, e)
-    log.info("Bases eliminadas (>%d semanas): %d", weeks, deleted)
+    log.info("Bases eliminadas: %d", deleted)
 
 
 # ---------------------------------------------------------------------------
-# SQLITE
+# SQLITE DATABASE UPDATE
 # ---------------------------------------------------------------------------
-def update_sqlite_database(csv_path: Path, week_id: str) -> Optional[Path]:
-    """DELETE por week_id + INSERT en una transaccion. Todo es dato real
-    (is_synthetic = 0; la columna se mantiene por compatibilidad)."""
+def update_sqlite_database(
+    csv_path: Path, week_id: str, is_synthetic: bool = False
+) -> Optional[Path]:
+    log.info("Procesando chart data desde %s ...", csv_path)
     rows = _read_csv_normalized(Path(csv_path))
     if not rows:
         log.error("CSV vacio o sin filas validas: %s", csv_path)
         return None
+
+    for r in rows:
+        if "_is_synthetic" not in r:
+            r["_is_synthetic"] = 1 if is_synthetic else 0
+
     log.info("Canciones cargadas: %d", len(rows))
     for i, r in enumerate(rows[:5]):
-        log.info("  %d. %s - %s", i + 1, str(r.get("Track Name", ""))[:40], str(r.get("Artist Names", ""))[:40])
+        log.info(
+            "  %d. %s - %s",
+            i + 1,
+            str(r.get("Track Name", ""))[:40],
+            str(r.get("Artist Names", ""))[:40],
+        )
 
     ensure_directories()
     db_path = DATABASE_DIR / f"youtube_charts_{week_id}.db"
     if db_path.exists():
+        log.info("Creando backup antes de actualizar...")
         create_backup_before_update(week_id)
 
     now = datetime.now()
     download_date = now.strftime("%Y-%m-%d")
     download_time = now.strftime("%H:%M:%S")
     timestamp = now.strftime("%Y%m%d_%H%M%S")
-    all_cols = CANONICAL_COLUMNS + ["download_date", "download_time", "week_id", "timestamp", "is_synthetic"]
+
+    all_cols = CANONICAL_COLUMNS + [
+        "download_date",
+        "download_time",
+        "week_id",
+        "timestamp",
+        "is_synthetic",
+    ]
 
     try:
         conn = sqlite3.connect(db_path)
@@ -405,16 +529,19 @@ def update_sqlite_database(csv_path: Path, week_id: str) -> Optional[Path]:
             existing = {row[1] for row in cur.fetchall()}
             if "is_synthetic" not in existing:
                 try:
-                    cur.execute("ALTER TABLE chart_data ADD COLUMN is_synthetic INTEGER DEFAULT 0")
+                    cur.execute(
+                        "ALTER TABLE chart_data ADD COLUMN is_synthetic INTEGER DEFAULT 0"
+                    )
                 except sqlite3.OperationalError:
                     pass
 
             cur.execute("DELETE FROM chart_data WHERE week_id = ?", (week_id,))
-            if cur.rowcount:
-                log.info("Eliminados %d registros viejos de %s", cur.rowcount, week_id)
+            deleted = cur.rowcount
+            if deleted:
+                log.info("Eliminados %d registros viejos para %s", deleted, week_id)
 
             placeholders = ", ".join(["?"] * len(all_cols))
-            quoted = ", ".join(f'"{c}"' for c in all_cols)
+            quoted = ", ".join([f'"{c}"' for c in all_cols])
             sql = f"INSERT INTO chart_data ({quoted}) VALUES ({placeholders})"
 
             to_insert = []
@@ -425,24 +552,43 @@ def update_sqlite_database(csv_path: Path, week_id: str) -> Optional[Path]:
                     if c in ("Rank", "Previous Rank", "Periods on Chart", "Views") and v == "":
                         v = None
                     vals.append(v)
-                vals.extend([download_date, download_time, week_id, timestamp, 0])
+                vals.extend(
+                    [
+                        download_date,
+                        download_time,
+                        week_id,
+                        timestamp,
+                        int(r.get("_is_synthetic", 0)),
+                    ]
+                )
                 to_insert.append(tuple(vals))
+
             cur.executemany(sql, to_insert)
 
-            for idx_name, idx_cols in (
+            indices = [
                 ("idx_date", "chart_data(download_date)"),
                 ("idx_week", "chart_data(week_id)"),
                 ("idx_rank", 'chart_data("Rank")'),
                 ("idx_artist", 'chart_data("Artist Names")'),
-            ):
+            ]
+            for idx_name, idx_cols in indices:
                 try:
                     cur.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {idx_cols}")
                 except sqlite3.OperationalError as e:
                     log.warning("No se pudo crear indice %s: %s", idx_name, e)
 
             conn.commit()
+
             cur.execute("SELECT COUNT(*) FROM chart_data")
-            log.info("DB actualizada: total=%d path=%s", cur.fetchone()[0], db_path)
+            total = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(DISTINCT download_date) FROM chart_data")
+            uniq = cur.fetchone()[0]
+            log.info(
+                "DB actualizada: total=%d fechas_distintas=%d path=%s",
+                total,
+                uniq,
+                db_path,
+            )
             return db_path
         finally:
             conn.close()
@@ -466,7 +612,7 @@ def week_already_done(week_id: str, min_real: int = 50) -> bool:
             conn.close()
         return n >= min_real
     except Exception as e:
-        log.info("Check de idempotencia fallo (ignorado): %s", e)
+        log.info("Check idempotencia fallo (ignorado): %s", e)
         return False
 
 
@@ -485,478 +631,258 @@ def list_available_databases() -> None:
             finally:
                 conn.close()
             total += count
-            log.info("  %s: %d registros, %.1f KB", db.stem.replace("youtube_charts_", ""), count, db.stat().st_size / 1024)
+            log.info(
+                "  %s: %d registros, %.1f KB",
+                db.stem.replace("youtube_charts_", ""),
+                count,
+                db.stat().st_size / 1024,
+            )
         except Exception as e:
             log.warning("Error leyendo %s: %s", db.name, e)
     log.info("TOTAL: %d registros en %d bases", total, len(dbs))
 
 
 # ---------------------------------------------------------------------------
-# EXTRACCION EN EL NAVEGADOR
+# FALLBACK (solo para pruebas manuales)
 # ---------------------------------------------------------------------------
-# Misma logica que la version que funciona en tu PC (filas a partir de links
-# de video y su contenedor). Cambio: recorre tambien los shadowRoot de TODOS
-# los elementos, en orden de documento.
+def create_fallback_file(week_id: str, reason: str = "") -> Optional[Path]:
+    log.warning("Creando fallback SINTETICO (no es dato real). Motivo: %s", reason)
+    ensure_directories()
+    rows: List[Dict[str, Any]] = []
+    for i in range(1, 101):
+        rows.append(
+            {
+                "Rank": i,
+                "Previous Rank": max(1, i - 1) if i > 1 else 1,
+                "Track Name": f"Popular Song {i}",
+                "Artist Names": f"Artist {chr(65 + ((i - 1) % 26))} and Collaborators",
+                "Periods on Chart": 10 + (i % 40),
+                "Views": 5_000_000 + (100 - i) * 50_000,
+                "Growth": f"{((101 - i) / 100):.2f}%",
+                "YouTube URL": f"https://www.youtube.com/watch?v=example{i:03d}",
+            }
+        )
+    filename = ARCHIVE_DIR / f"fallback_chart_{week_id}.csv"
+    with open(filename, "w", newline="", encoding="utf-8") as f:
+        fieldnames = CANONICAL_COLUMNS + ["is_synthetic"]
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for r in rows:
+            norm = _normalize_row(r, r["Rank"])
+            norm["is_synthetic"] = 1
+            writer.writerow({**norm, "is_synthetic": 1})
+    log.warning("Fallback creado en %s (100 registros SINTETICOS)", filename)
+    return filename
+
+
+# ---------------------------------------------------------------------------
+# EXTRACCION DOM (con shadow roots)
+# ---------------------------------------------------------------------------
 _JS_EXTRACT_DOM = r"""
 () => {
   const rows = [];
   const seen = new Set();
   const getText = (el) => (el.innerText || el.textContent || '').trim();
-  const links = [];
-  const walk = (root) => {
+  const allEls = [];
+  const collect = (root) => {
     if (!root || !root.querySelectorAll) return;
     root.querySelectorAll('*').forEach((el) => {
-      if (el.tagName === 'A') {
-        const href = el.getAttribute('href') || '';
-        if (href) links.push({href, txt: getText(el).slice(0, 150), el});
-      }
-      if (el.shadowRoot) walk(el.shadowRoot);
+      allEls.push(el);
+      if (el.shadowRoot) collect(el.shadowRoot);
     });
   };
-  walk(document);
+  collect(document);
 
+  // 1) Tablas clasicas
   const tableRows = document.querySelectorAll('table tbody tr');
   if (tableRows.length >= 20) {
     tableRows.forEach((tr, idx) => {
-      const cells = Array.from(tr.querySelectorAll('td, th')).map(c => c.innerText.trim()).filter(Boolean);
+      const cells = Array.from(tr.querySelectorAll('td, th'))
+        .map((c) => c.innerText.trim())
+        .filter(Boolean);
       const link = tr.querySelector('a[href]');
       const href = link ? link.getAttribute('href') : '';
       if (cells.length >= 2) {
-        rows.push({Rank: idx + 1, 'Track Name': cells[1] || '', 'Artist Names': cells[2] || '', 'Views': cells[3] || '', 'YouTube URL': href || ''});
+        rows.push({
+          Rank: idx + 1,
+          'Track Name': cells[1] || '',
+          'Artist Names': cells[2] || '',
+          'Views': cells[3] || '',
+          'YouTube URL': href || '',
+        });
       }
     });
     if (rows.length >= 20) return rows;
   }
 
-  for (const item of links) {
-    const href = item.href || '';
-    const m = href.match(/v=([A-Za-z0-9_-]{11})/) || href.match(/youtu\.be\/([A-Za-z0-9_-]{11})/) || href.match(/\/watch\/([A-Za-z0-9_-]{11})/);
+  // 2) Filas de chart por clase
+  const rowCands = allEls.filter((el) => {
+    const cls = (el.className || '').toString().toLowerCase();
+    return cls.includes('chart-row') || cls.includes('chart-item') || cls.includes('row-chart');
+  });
+  for (const rowEl of rowCands) {
+    const txt = getText(rowEl);
+    if (!txt || txt.length < 10 || txt.length > 500) continue;
+    const lines = txt.split('\n').map((s) => s.trim()).filter(Boolean);
+    if (lines.length < 3) continue;
+    let rank = parseInt(lines[0], 10);
+    if (isNaN(rank) || rank < 1 || rank > 200) {
+      const m = txt.match(/^\s*(\d{1,3})\s/);
+      if (!m) continue;
+      rank = parseInt(m[1], 10);
+    }
+    const hrefEl = rowEl.querySelector ? rowEl.querySelector('a[href*="watch"], a[href*="youtu"]') : null;
+    let href = hrefEl ? hrefEl.getAttribute('href') || '' : '';
+    if (!href) {
+      const a2 = rowEl.querySelector ? rowEl.querySelector('a[href]') : null;
+      if (a2) href = a2.getAttribute('href') || '';
+    }
+    let vid = '';
+    if (href) {
+      const mm = href.match(/v=([A-Za-z0-9_-]{11})/) || href.match(/youtu\.be\/([A-Za-z0-9_-]{11})/);
+      if (mm) vid = mm[1];
+    }
+    let title = '', artist = '', viewsRaw = '';
+    const nonRank = lines.filter((l) => !/^\d+$/.test(l));
+    if (nonRank.length >= 1) title = nonRank[0];
+    if (nonRank.length >= 2) artist = nonRank[1];
+    for (const l of lines) {
+      if (/[\d,.]+\s*[KMB]?\s*(views|reproducciones|vistas)/i.test(l) || /^[\d,.]+[KMB]?$/.test(l)) viewsRaw = l;
+    }
+    if (title && artist) {
+      const key = rank + '|' + title;
+      if (!seen.has(key)) {
+        seen.add(key);
+        rows.push({
+          Rank: rank,
+          'Track Name': title,
+          'Artist Names': artist,
+          'Views': viewsRaw,
+          'Views Raw': viewsRaw,
+          'YouTube URL': vid ? 'https://www.youtube.com/watch?v=' + vid : href,
+          videoId: vid,
+        });
+      }
+    }
+  }
+  if (rows.length >= 20) {
+    rows.sort((a, b) => a.Rank - b.Rank);
+    return rows;
+  }
+
+  // 3) Links a videos
+  for (const el of allEls) {
+    if (el.tagName !== 'A') continue;
+    const href = el.getAttribute('href') || '';
+    if (!href) continue;
+    const m =
+      href.match(/v=([A-Za-z0-9_-]{11})/) ||
+      href.match(/youtu\.be\/([A-Za-z0-9_-]{11})/) ||
+      href.match(/\/watch\/([A-Za-z0-9_-]{11})/);
     const vid = m ? m[1] : '';
-    const container = item.el.closest ? item.el.closest('tr, li, [role="row"], [class*="row"], [class*="item"], [class*="chart"]') : null;
-    const text = container ? container.innerText : item.txt;
-    const lines = (text || '').split('\n').map(s => s.trim()).filter(Boolean);
+    const container = el.closest ? el.closest('tr, li, [role="row"], [class*="row"], [class*="item"], [class*="chart"]') : null;
+    const text = container ? container.innerText : getText(el);
+    const lines = (text || '').split('\n').map((s) => s.trim()).filter(Boolean);
     if (vid) {
       if (seen.has(vid)) continue;
       seen.add(vid);
     } else {
       if (lines.length < 3) continue;
-      const key = (item.txt + '|' + lines.join('|')).slice(0, 200);
+      const key = (getText(el) + '|' + lines.join('|')).slice(0, 200);
       if (seen.has(key)) continue;
-      if (!/[0-9]/.test(text || '')) continue;
+      if (!/[0-9]/.test(text)) continue;
       seen.add(key);
     }
-    let title = (item.el.getAttribute('aria-label') || item.txt || '').trim().split('\n')[0] || (lines[1] || lines[0] || '');
+    let title = (el.getAttribute('aria-label') || getText(el) || '').trim().split('\n')[0] || lines[1] || lines[0] || '';
     title = title.replace(/^\d+\.\s*/, '').replace(/^\d+\s+/, '');
-    let artist = '';
-    let viewsRaw = '';
+    let artist = '', viewsRaw = '';
     for (const l of lines) {
       if (/[\d,.]+\s*[KMB]?\s*(views|reproducciones|vistas)/i.test(l)) viewsRaw = l;
     }
     for (const l of lines) {
-      if (l !== title && l !== viewsRaw && !/^\d+$/.test(l) && l.length > 1 && l.length < 90) { artist = l; break; }
+      if (l !== title && l !== viewsRaw && !/^\d+$/.test(l) && l.length > 1 && l.length < 90) {
+        artist = l;
+        break;
+      }
     }
-    rows.push({Rank: rows.length + 1, 'Track Name': title, 'Artist Names': artist, 'Views': viewsRaw, 'Views Raw': viewsRaw, 'YouTube URL': vid ? 'https://www.youtube.com/watch?v=' + vid : href, videoId: vid});
+    rows.push({
+      Rank: rows.length + 1,
+      'Track Name': title,
+      'Artist Names': artist,
+      'Views': viewsRaw,
+      'Views Raw': viewsRaw,
+      'YouTube URL': vid ? 'https://www.youtube.com/watch?v=' + vid : href,
+      videoId: vid,
+    });
   }
   return rows;
 }
 """
 
-# Texto visible de toda la pagina, entrando en shadow roots.
-_JS_PAGE_TEXT = r"""
-() => {
-  const out = [];
-  const walk = (root) => {
-    if (!root) return;
-    const tw = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    let n;
-    while ((n = tw.nextNode())) {
-      const p = n.parentElement;
-      const t = p ? p.tagName : '';
-      if (t === 'STYLE' || t === 'SCRIPT' || t === 'NOSCRIPT' || t === 'TEMPLATE') continue;
-      const v = (n.nodeValue || '').trim();
-      if (v) out.push(v);
-    }
-    if (root.querySelectorAll) {
-      root.querySelectorAll('*').forEach((el) => { if (el.shadowRoot) walk(el.shadowRoot); });
-    }
-  };
-  walk(document);
-  return out.join('\n');
-}
-"""
 
-_JS_CAPTCHA = r"""
-() => {
-  const low = (document.body ? document.body.innerText : '').toLowerCase();
-  if (low.includes('select all images') || low.includes("i'm not a robot") || low.includes('unusual traffic')) return true;
-  for (const el of document.querySelectorAll('iframe[src*="recaptcha"]')) {
-    const r = el.getBoundingClientRect();
-    const cs = getComputedStyle(el);
-    if (r.width >= 300 && r.height >= 100 && cs.visibility !== 'hidden' && cs.display !== 'none') return true;
-  }
-  return false;
-}
-"""
-
-
-async def page_text(page) -> str:
-    try:
-        return await page.evaluate(_JS_PAGE_TEXT) or ""
-    except Exception:
-        return ""
-
-
-def chart_ready(text: str) -> bool:
-    return "Weekly views" in text or "Weekly Top Songs" in text or len(text) > 3000
-
-
-async def detect_captcha(page) -> bool:
-    try:
-        return bool(await page.evaluate(_JS_CAPTCHA))
-    except Exception:
-        return False
-
-
-async def humanize(page) -> None:
-    """Movimientos de mouse y scroll leves; barato y no hace dano."""
-    try:
-        for x, y in ((300, 300), (640, 420), (900, 300), (500, 600)):
-            await page.mouse.move(x, y, steps=12)
-            await page.wait_for_timeout(250)
-        await page.mouse.wheel(0, 300)
-    except Exception:
-        pass
-
-
-async def accept_consent(page) -> None:
-    for label in (r"^Accept all$", r"^Reject all$", r"^Aceptar todo$", r"^Rechazar todo$"):
-        try:
-            btn = page.get_by_role("button", name=re.compile(label, re.I))
-            if await btn.count() > 0:
-                await btn.first.click(timeout=3000)
-                log.info("Click en consentimiento: %s", label)
-                await page.wait_for_timeout(1500)
-                return
-        except Exception:
-            continue
-
-
-async def wait_for_chart(page, wait_s: int, interactive: bool) -> str:
-    """Devuelve 'ok', 'captcha' o 'timeout'."""
-    start = time.monotonic()
-    limit = max(wait_s, 180) if interactive else wait_s
-    captcha_since: Optional[float] = None
-    while time.monotonic() - start < limit:
-        if chart_ready(await page_text(page)):
-            return "ok"
-        if await detect_captcha(page):
-            if captcha_since is None:
-                captcha_since = time.monotonic()
-                if interactive:
-                    log.warning("Captcha visible: resuelvelo a mano en la ventana (hasta %d s).", limit)
-                else:
-                    log.warning("Captcha visible y no hay humano: se esperan %d s por si se resuelve solo.", CAPTCHA_GRACE_S)
-            if not interactive and time.monotonic() - captcha_since > CAPTCHA_GRACE_S:
-                return "captcha"
-        else:
-            captcha_since = None
-        await asyncio.sleep(3)
-    return "captcha" if await detect_captcha(page) else "timeout"
-
-
-async def extract_rows(page) -> List[Dict[str, Any]]:
+async def _extract_via_dom(page) -> List[Dict[str, Any]]:
     try:
         data = await page.evaluate(_JS_EXTRACT_DOM)
+        if not isinstance(data, list):
+            return []
+        out = [r for r in data if _clean_text(r.get("Track Name"))]
+        seen = set()
+        dedup = []
+        for r in out:
+            u = r.get("YouTube URL", "")
+            if u and u in seen:
+                continue
+            seen.add(u)
+            dedup.append(r)
+        for i, r in enumerate(dedup, 1):
+            r["Rank"] = i
+        log.info("Extraccion DOM: %d filas", len(dedup))
+        return dedup
     except Exception as e:
         log.info("Extraccion DOM fallo: %s", e)
         return []
-    if not isinstance(data, list):
-        return []
-    out: List[Dict[str, Any]] = []
-    seen: set = set()
-    for r in data:
-        if not _clean_text(r.get("Track Name")):
-            continue
-        url = r.get("YouTube URL", "")
-        if url and url in seen:
-            continue
-        seen.add(url)
-        out.append(r)
-    for i, r in enumerate(out, 1):  # sin huecos en el ranking
-        r["Rank"] = i
-    return out
 
 
-async def save_debug(page, url: str, tag: str) -> None:
-    """Captura + HTML + texto en logs/debug/ (el workflow sube logs/)."""
+async def _get_page_text_with_shadow(page) -> str:
+    """Charts es Polymer: el texto real esta en shadow DOM, NO en body.innerText."""
     try:
-        dbg = LOGS_DIR / "debug"
-        dbg.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        try:
-            await page.screenshot(path=str(dbg / f"debug_{tag}_{ts}.png"), timeout=15_000)
-            log.info("Debug: screenshot logs/debug/debug_%s_%s.png", tag, ts)
-        except Exception as e:
-            log.info("Debug screenshot fallo: %s", e)
-        try:
-            html = await page.content()
-            (dbg / f"debug_{tag}_{ts}.html").write_text(html, encoding="utf-8")
-        except Exception as e:
-            log.info("Debug HTML fallo: %s", e)
-        txt = await page_text(page)
-        (dbg / f"debug_{tag}_{ts}.txt").write_text(
-            f"URL: {url}\nFinal URL: {page.url}\nTexto ({len(txt)} chars):\n{txt[:8000]}", encoding="utf-8"
+        txt = await page.evaluate(
+            """() => {
+                const out = [];
+                const walk = (root) => {
+                    if (!root) return;
+                    try {
+                        const tw = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+                        let n;
+                        while ((n = tw.nextNode())) {
+                            const p = n.parentElement;
+                            if (!p) continue;
+                            const tag = (p.tagName || '').toUpperCase();
+                            if (tag === 'STYLE' || tag === 'SCRIPT' || tag === 'NOSCRIPT' || tag === 'TEMPLATE') continue;
+                            const v = (n.nodeValue || '').trim();
+                            if (v) out.push(v);
+                        }
+                    } catch (e) {}
+                    if (root.querySelectorAll) {
+                        root.querySelectorAll('*').forEach((el) => {
+                            if (el.shadowRoot) walk(el.shadowRoot);
+                        });
+                    }
+                };
+                walk(document);
+                if (document.body && document.body.innerText) out.push(document.body.innerText);
+                return out.join('\\n');
+            }"""
         )
-        log.info("Debug: texto visible %d chars, snippet: %s", len(txt), txt[:300].replace("\n", " | "))
+        return txt or ""
     except Exception as e:
-        log.info("Debug fallo: %s", e)
+        log.info("Shadow text fallo: %s", e)
+        return ""
 
 
-def browser_args(headless: bool) -> List[str]:
-    args = ["--disable-blink-features=AutomationControlled", "--window-size=1920,1080"]
-    if not headless:
-        args.append("--start-maximized")
-    if IS_LINUX:
-        args.append("--disable-dev-shm-usage")
-        if hasattr(os, "geteuid") and os.geteuid() == 0:
-            args.append("--no-sandbox")  # solo hace falta como root
-    return args
-
-
-async def download_youtube_charts(
-    chart: str,
-    country: str,
-    *,
-    headless: bool,
-    use_chrome: bool,
-    keep_profile: bool,
-    interactive: bool,
-    wait_s: int,
-    min_rows: int,
-) -> Optional[Path]:
+async def _detect_captcha(page) -> bool:
+    """Detecta captcha REAL. Polymer: body.innerText es 0 aunque el chart este visible."""
     try:
-        from playwright.async_api import async_playwright
-    except ImportError:
-        log.error("Playwright no esta instalado en este entorno")
-        return None
-
-    ensure_directories()
-    filename = ARCHIVE_DIR / "latest_chart.csv"
-    log.info("Descargando YouTube Charts %s / %s (headless=%s, chrome=%s, perfil=%s)", chart, country, headless, use_chrome, keep_profile)
-
-    async with async_playwright() as p:
-        browser = None
-        context = None
-        try:
-            ctx_opts: Dict[str, Any] = {"locale": "en-US"}  # el parser busca textos en ingles
-            if BROWSER_TZ:
-                ctx_opts["timezone_id"] = BROWSER_TZ
-            if headless:
-                ctx_opts["viewport"] = {"width": 1920, "height": 1080}
-            else:
-                ctx_opts["no_viewport"] = True  # ventana y viewport coherentes
-
-            launch_opts: Dict[str, Any] = dict(
-                headless=headless,
-                args=browser_args(headless),
-                ignore_default_args=["--enable-automation"],
-            )
-            if use_chrome:
-                launch_opts["channel"] = "chrome"
-
-            if keep_profile:
-                PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-                log.info("Perfil persistente: %s", PROFILE_DIR)
-                try:
-                    context = await p.chromium.launch_persistent_context(str(PROFILE_DIR), **launch_opts, **ctx_opts)
-                except Exception as e:
-                    log.error("No se pudo abrir el perfil (si hay otro Chrome usando %s, cierralo): %s", PROFILE_DIR, e)
-                    return None
-            else:
-                browser = await p.chromium.launch(**launch_opts)
-                context = await browser.new_context(**ctx_opts)
-
-            page = context.pages[0] if context.pages else await context.new_page()
-            page.set_default_timeout(60_000)
-            try:
-                log.info("User-Agent real: %s", await page.evaluate("navigator.userAgent"))
-            except Exception:
-                pass
-
-            for url in get_chart_urls(chart, country):
-                log.info("Navegando a %s", url)
-                try:
-                    try:
-                        await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
-                    except Exception as e:
-                        log.info("goto fallo, sigo: %s", e)
-                    await page.wait_for_timeout(3000)
-                    await humanize(page)
-                    await accept_consent(page)
-
-                    state = await wait_for_chart(page, wait_s, interactive)
-                    log.info("Estado de la pagina: %s", state)
-
-                    for _ in range(5):  # carga contenido dinamico
-                        try:
-                            await page.evaluate("window.scrollBy(0, 900)")
-                        except Exception:
-                            pass
-                        await page.wait_for_timeout(1200)
-                    try:
-                        await page.evaluate("window.scrollTo(0, 0)")
-                    except Exception:
-                        pass
-                    await page.wait_for_timeout(1000)
-
-                    rows = await extract_rows(page)
-                    log.info("Filas extraidas en %s: %d", url, len(rows))
-                    if len(rows) >= min_rows:
-                        return save_rows_to_csv(rows, filename)
-
-                    await save_debug(page, url, state)
-                    if state == "captcha":
-                        log.error("CAPTCHA en %s. Sin humano no se puede continuar (ver README: perfil persistente / runner propio).", url)
-                        break  # la otra URL daria lo mismo
-                    log.warning("Pocas filas (%d < %d) en %s, pruebo la siguiente URL...", len(rows), min_rows, url)
-                except Exception as e:
-                    log.warning("Error en %s: %s", url, e)
-
-            log.error("No se pudo descargar el chart desde ninguna URL")
-            return None
-        finally:
-            for closable in (context, browser):
-                try:
-                    if closable is not None:
-                        await closable.close()
-                except Exception:
-                    pass
-
-
-# ---------------------------------------------------------------------------
-# MAIN
-# ---------------------------------------------------------------------------
-def _main_inner(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="YouTube Charts scraper (v3)")
-    ap.add_argument("--country", default="global", help="global, us, cl ...")
-    ap.add_argument("--chart", default="TopSongs", help="TopSongs, TopArtists ...")
-    ap.add_argument("--week", default=None, help="Forzar week_id (ej. 2026-W47). Por defecto, la semana ISO actual")
-    ap.add_argument("--force", action="store_true", help="Re-scrapear aunque la semana ya tenga datos reales")
-    ap.add_argument("--terminal", action="store_true", help="No interactivo: nunca espera Enter ni captcha manual. NO es headless")
-    ap.add_argument("--headless", action="store_true", help="Sin ventana (NO recomendado: mas captcha)")
-    ap.add_argument("--use-chrome", action="store_true", help="Usa Google Chrome instalado (channel=chrome)")
-    ap.add_argument("--no-profile", action="store_true", help="Perfil temporal limpio en vez del persistente")
-    ap.add_argument("--wait", type=int, default=75, help="Segundos max. esperando el chart (modo no interactivo)")
-    ap.add_argument("--min-rows", type=int, default=50, help="Minimo de filas para aceptar el resultado")
-    ap.add_argument("--open-folder", action="store_true", help="Abre la carpeta de salida al terminar bien")
-    ap.add_argument("--pause", action="store_true", help="Espera Enter al terminar")
-    # Compatibilidad con lanzadores viejos (ignorados):
-    ap.add_argument("--show-browser", action="store_true", help=argparse.SUPPRESS)
-    ap.add_argument("--allow-fallback", action="store_true", help=argparse.SUPPRESS)
-    ap.add_argument("--no-browser", action="store_true", help=argparse.SUPPRESS)
-    args = ap.parse_args(argv)
-
-    print("\n" + "=" * 70)
-    print("YOUTUBE CHARTS - EXTRACTOR v3")
-    print(f"Chart: {args.chart} / Pais: {args.country}")
-    print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    print("=" * 70)
-
-    ensure_directories()
-    setup_file_logging()
-    if args.allow_fallback:
-        log.warning("--allow-fallback ya no existe: nunca se guardan datos sinteticos")
-    if args.no_browser:
-        log.warning("--no-browser ya no existe: solo hay extraccion con navegador")
-
-    week_id = args.week or get_week_identifier()
-    log.info("Semana: %s | base=%s", week_id, BASE_DIR)
-    if not args.force and week_already_done(week_id):
-        log.info("Semana %s ya tiene datos reales. Saltando (usa --force para re-scrapear).", week_id)
-        return 0
-
-    print("\n0. VERIFICANDO ENTORNO...")
-    import importlib.util
-
-    if importlib.util.find_spec("playwright") is None:
-        log.error("Playwright no esta instalado. Activa tu venv: pip install -r requirements-ci.txt")
-        return 1
-    if args.use_chrome and not chrome_available():
-        log.error("--use-chrome pedido pero no encuentro Google Chrome (sudo apt install ./google-chrome-stable_current_amd64.deb)")
-        return 1
-    headless = args.headless
-    if not headless and not has_display():
-        log.error("No hay DISPLAY. Corre con xvfb-run -a -s \"-screen 0 1920x1080x24\" <comando> (o --headless, con mas riesgo de captcha).")
-        return 1
-    if headless:
-        log.warning("--headless explicito: en headless Google muestra captcha con mucha mas frecuencia.")
-    interactive = (not args.terminal) and (not headless)
-
-    print("\n1. DESCARGANDO YOUTUBE CHARTS...")
-    csv_path: Optional[Path] = None
-    try:
-        csv_path = asyncio.run(
-            download_youtube_charts(
-                args.chart,
-                args.country,
-                headless=headless,
-                use_chrome=args.use_chrome,
-                keep_profile=not args.no_profile,
-                interactive=interactive,
-                wait_s=args.wait,
-                min_rows=args.min_rows,
-            )
-        )
-    except Exception as e:
-        log.error("Error en descarga: %s", e, exc_info=True)
-
-    print("\n2. VALIDANDO CSV...")
-    if csv_path is None or not Path(csv_path).exists():
-        log.error("CRITICO: no se obtuvo el chart real. No se guarda nada en la DB.")
-        return 2
-    with open(csv_path, "r", encoding="utf-8", errors="ignore") as f:
-        num_songs = max(sum(1 for _ in f) - 1, 0)
-    log.info("Canciones en CSV: %d", num_songs)
-    if num_songs < args.min_rows:
-        log.error("CSV con %d canciones (< %d). Abortando sin guardar en la DB.", num_songs, args.min_rows)
-        return 2
-    if num_songs < 100:
-        log.warning("El chart deberia tener 100 canciones y se obtuvieron %d. Revisa el screenshot de logs/debug/.", num_songs)
-
-    print("\n3. GUARDANDO EN SQLITE...")
-    if not update_sqlite_database(Path(csv_path), week_id):
-        log.error("Error critico actualizando la DB")
-        return 1
-
-    print("\n4. LIMPIANDO ARCHIVOS VIEJOS...")
-    cleanup_old_backups(7)
-    cleanup_old_databases(52)
-
-    print("\n5. RESUMEN FINAL:")
-    list_available_databases()
-    print("\n" + "=" * 70)
-    print("PROCESO COMPLETADO - DATOS REALES")
-    print("=" * 70)
-    return 0
-
-
-def main(argv: Optional[List[str]] = None) -> int:
-    code = _main_inner(argv)
-    argv_list = list(argv) if argv is not None else sys.argv[1:]
-    if "--open-folder" in argv_list and code == 0:
-        open_folder(ARCHIVE_DIR)
-    try:
-        has_tty = sys.stdin.isatty()
-    except Exception:
-        has_tty = False
-    non_interactive = IS_CI or "--terminal" in argv_list
-    if not non_interactive and ("--pause" in argv_list or not has_tty):
-        try:
-            input("\nPresiona Enter para cerrar...")
-        except Exception:
-            pass
-    return code
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+        shadow_txt = await _get_page_text_with_shadow(page)
+        low = (shadow_txt or "").lower()
+        has_chart = ("weekly top songs" in low
