@@ -885,4 +885,499 @@ async def _detect_captcha(page) -> bool:
     try:
         shadow_txt = await _get_page_text_with_shadow(page)
         low = (shadow_txt or "").lower()
-        has_chart = ("weekly top songs" in low
+        has_chart = ("weekly top songs" in low or "weekly top artists" in low) and (
+            "weekly views" in low or "rank" in low
+        )
+        if has_chart:
+            return False
+        if len(shadow_txt) > 2000 and ("weekly top songs" in low or "top songs" in low):
+            return False
+        if "select all images" in low and "click verify" in low:
+            return True
+        has_visible = await page.evaluate(
+            """() => {
+                const cands = document.querySelectorAll('[class*="recaptcha"], iframe[src*="recaptcha"]');
+                for (const el of cands) {
+                    const r = el.getBoundingClientRect ? el.getBoundingClientRect() : {width:0,height:0};
+                    if (r.width >= 300 && r.height >= 100) return true;
+                }
+                return false;
+            }"""
+        )
+        if has_visible and not has_chart:
+            return True
+        return False
+    except Exception as e:
+        log.info("Detect captcha fallo: %s", e)
+        return False
+
+
+async def _wait_for_captcha_resolution(
+    page, url: str, show_browser: bool, max_wait: int = 180, terminal_mode: bool = False
+) -> bool:
+    """Si hay captcha, espera a que desaparezca. Si hay navegador visible, deja que lo resuelvas tu."""
+    try:
+        has = await _detect_captcha(page)
+    except Exception:
+        has = False
+    if not has:
+        return True
+    try:
+        _chart_ok = await page.evaluate(
+            "() => { const bt = document.body ? document.body.innerText : ''; return bt.includes('Weekly Top Songs') && bt.includes('Weekly views'); }"
+        )
+        if _chart_ok:
+            log.info(
+                "Captcha detectado pero chart YA visible. Era falso positivo, sigo sin esperar."
+            )
+            return True
+    except Exception:
+        pass
+
+    log.warning("CAPTCHA DETECTADO en %s", url)
+    if show_browser and not terminal_mode:
+        log.warning("Resuelve el CAPTCHA a mano en la ventana de Chrome.")
+        log.warning(
+            "Tienes %d segundos. El scraper esperara a que el chart aparezca.", max_wait
+        )
+    elif terminal_mode:
+        log.warning(
+            "Captcha en modo terminal/CI: no hay humano para resolverlo. Se espera %d s por si se va solo.",
+            min(max_wait, 20),
+        )
+        max_wait = min(max_wait, 20)
+    else:
+        log.warning("Estas en headless. Corre sin --headless para resolverlo a mano.")
+        log.warning("Esperando %d s por si el captcha se va solo...", min(max_wait, 30))
+        max_wait = min(max_wait, 30)
+
+    for i in range(0, max_wait, 3):
+        await asyncio.sleep(3)
+        still = await _detect_captcha(page)
+        if not still:
+            log.info("Captcha ya no esta (despues de %d s). Sigo con extraccion.", i + 3)
+            await asyncio.sleep(3)
+            return True
+        if (i + 3) % 30 == 0:
+            log.warning(
+                "Captcha sigue ahi despues de %d s... (max %d s)", i + 3, max_wait
+            )
+    log.error("Captcha siguio despues de %d s. No se pudo extraer.", max_wait)
+    return False
+
+
+# ---------------------------------------------------------------------------
+# PLAYWRIGHT - descarga principal
+# ---------------------------------------------------------------------------
+async def download_youtube_charts(
+    chart: str = "TopSongs",
+    country: str = "global",
+    show_browser: bool = False,
+    use_chrome: bool = False,
+    keep_profile: bool = True,
+    terminal_mode: bool = False,
+) -> Optional[Path]:
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        log.error("Playwright no instalado")
+        return None
+
+    log.info(
+        "Descargando YouTube Charts %s / %s con Playwright...", chart, country
+    )
+    ensure_directories()
+    filename = ARCHIVE_DIR / "latest_chart.csv"
+
+    async with async_playwright() as p:
+        browser = None
+        context = None
+        try:
+            headless = not show_browser
+            if terminal_mode and (
+                os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+            ):
+                if headless:
+                    log.info(
+                        "Modo TERMINAL + DISPLAY=%s (xvfb): HEADED.",
+                        os.environ.get("DISPLAY"),
+                    )
+                    headless = False
+                    show_browser = True
+            if show_browser and IS_LINUX and not (
+                os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+            ):
+                log.warning(
+                    "Pediste --show-browser pero no hay DISPLAY (Linux sin GUI). Se usara headless=True."
+                )
+                headless = True
+                show_browser = False
+
+            browser_args = get_browser_args()
+            if headless and "--headless=new" not in browser_args:
+                browser_args.append("--headless=new")
+
+            if keep_profile and IS_LOCAL:
+                log.info("Usando perfil persistente local: %s", BROWSER_PROFILE_DIR)
+                BROWSER_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+                persistent_kwargs: Dict[str, Any] = dict(
+                    headless=headless,
+                    args=browser_args,
+                    viewport={"width": 1920, "height": 1080},
+                    user_agent=(
+                        "Mozilla/5.0 (X11; Linux x86_64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/131.0.0.0 Safari/537.36"
+                    ),
+                    locale="en-US",
+                    timezone_id=LOCAL_TIMEZONE,
+                    accept_downloads=True,
+                    extra_http_headers={
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                        "Referer": "https://charts.youtube.com/",
+                    },
+                )
+                if use_chrome:
+                    persistent_kwargs["channel"] = "chrome"
+                    log.info("Usando tu Chrome instalado (channel=chrome)")
+                context = await p.chromium.launch_persistent_context(
+                    user_data_dir=str(BROWSER_PROFILE_DIR),
+                    **persistent_kwargs,
+                )
+            else:
+                launch_kwargs: Dict[str, Any] = dict(headless=headless, args=browser_args)
+                if use_chrome:
+                    launch_kwargs["channel"] = "chrome"
+                    log.info("Usando tu Chrome instalado (channel=chrome)")
+                browser = await p.chromium.launch(**launch_kwargs)
+                context = await browser.new_context(
+                    accept_downloads=True,
+                    viewport={"width": 1920, "height": 1080},
+                    user_agent=(
+                        "Mozilla/5.0 (X11; Linux x86_64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/131.0.0.0 Safari/537.36"
+                    ),
+                    locale="en-US",
+                    timezone_id=LOCAL_TIMEZONE,
+                    extra_http_headers={
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                        "Referer": "https://charts.youtube.com/",
+                    },
+                )
+
+            await context.add_init_script(
+                """
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US','en'] });
+                """
+            )
+
+            if keep_profile and IS_LOCAL and context.pages:
+                page = context.pages[0]
+            else:
+                page = await context.new_page()
+            try:
+                page.set_default_timeout(60_000)
+            except Exception:
+                pass
+
+            for url in get_chart_urls(chart, country):
+                log.info("Navegando a %s", url)
+                try:
+                    try:
+                        await page.goto(url, wait_until="networkidle", timeout=90_000)
+                    except Exception as e:
+                        log.info("goto networkidle fallo, reintento domcontentloaded: %s", e)
+                        try:
+                            await page.goto(url, wait_until="domcontentloaded", timeout=90_000)
+                        except Exception as e2:
+                            log.info("goto domcontentloaded fallo: %s", e2)
+                    await page.wait_for_timeout(8000)
+
+                    # Poll hasta 45s esperando texto del chart en shadow DOM
+                    for _poll in range(15):
+                        try:
+                            _poll_txt = await _get_page_text_with_shadow(page)
+                            if (
+                                "Weekly Top Songs" in _poll_txt
+                                and "Weekly views" in _poll_txt
+                            ):
+                                log.info(
+                                    "Chart visible en shadow tras %ds",
+                                    (_poll + 1) * 3,
+                                )
+                                break
+                            if (
+                                "Select all images" in _poll_txt
+                                or "I'm not a robot" in _poll_txt
+                            ):
+                                log.info("Captcha visible")
+                                break
+                        except Exception:
+                            pass
+                        await page.wait_for_timeout(3000)
+
+                    try:
+                        await _wait_for_captcha_resolution(
+                            page,
+                            url,
+                            show_browser,
+                            max_wait=(20 if terminal_mode else 180),
+                            terminal_mode=terminal_mode,
+                        )
+                    except Exception as e:
+                        log.info("Espera captcha fallo: %s", e)
+
+                    # Consentimiento
+                    for label in [
+                        r"Accept all",
+                        r"Reject all",
+                        r"Aceptar todo",
+                        r"Rechazar todo",
+                        r"Accept",
+                        r"Aceptar",
+                    ]:
+                        try:
+                            btn = page.get_by_role(
+                                "button", name=re.compile(label, re.I)
+                            )
+                            if await btn.count() > 0:
+                                await btn.first.click(timeout=3000)
+                                log.info("Click en consentimiento: %s", label)
+                                await page.wait_for_timeout(1500)
+                                break
+                        except Exception:
+                            continue
+
+                    # Scroll
+                    for _ in range(5):
+                        try:
+                            await page.evaluate("window.scrollBy(0, 900)")
+                        except Exception:
+                            pass
+                        await page.wait_for_timeout(1200)
+                    try:
+                        await page.evaluate("window.scrollTo(0,0)")
+                    except Exception:
+                        pass
+                    await page.wait_for_timeout(1000)
+
+                    # Extraccion DOM
+                    rows = await _extract_via_dom(page)
+                    if len(rows) >= 20:
+                        return save_rows_to_csv(rows, filename)
+
+                    # Debug si no hay filas
+                    if len(rows) < 10:
+                        try:
+                            dbg = LOGS_DIR / "debug"
+                            dbg.mkdir(parents=True, exist_ok=True)
+                            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            await page.screenshot(
+                                path=str(dbg / f"debug_{ts}.png"),
+                                full_page=False,
+                                timeout=15000,
+                            )
+                            html = await page.content()
+                            (dbg / f"debug_{ts}.html").write_text(html, encoding="utf-8")
+                            txt = await _get_page_text_with_shadow(page)
+                            (dbg / f"debug_{ts}.txt").write_text(
+                                txt[:8000], encoding="utf-8"
+                            )
+                            log.info(
+                                "Debug guardado en logs/debug/ (texto %d chars): %s",
+                                len(txt),
+                                txt[:300].replace("\n", " | "),
+                            )
+                        except Exception as e:
+                            log.info("Debug fallo: %s", e)
+
+                    log.warning(
+                        "Pocas filas (%d) en %s, probando siguiente URL...",
+                        len(rows),
+                        url,
+                    )
+                except Exception as e:
+                    log.warning("Error en %s: %s", url, e)
+                    continue
+
+            log.error("No se pudo descargar el chart desde ninguna URL")
+            return None
+        finally:
+            try:
+                if context is not None:
+                    await context.close()
+            except Exception:
+                pass
+            try:
+                if browser is not None:
+                    await browser.close()
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# MAIN
+# ---------------------------------------------------------------------------
+def _main_inner(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="YouTube Charts scraper v4")
+    parser.add_argument("--country", default="global")
+    parser.add_argument("--chart", default="TopSongs")
+    parser.add_argument("--week", default=None)
+    parser.add_argument("--allow-fallback", action="store_true")
+    parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--show-browser", action="store_true")
+    parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--use-chrome", action="store_true")
+    parser.add_argument("--no-profile", action="store_true")
+    parser.add_argument("--open-folder", action="store_true")
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--pause", action="store_true")
+    parser.add_argument(
+        "--terminal",
+        action="store_true",
+        help="No interactivo. NO significa headless: con xvfb-run -a corre HEADED.",
+    )
+    parser.add_argument("--wait", type=int, default=90)
+    parser.add_argument("--min-rows", type=int, default=50)
+    args = parser.parse_args(argv)
+
+    print("\n" + "=" * 70)
+    print("YOUTUBE CHARTS - EXTRACTOR v4")
+    print(
+        f"terminal={args.terminal} headless={args.headless} DISPLAY={os.environ.get('DISPLAY', '(sin DISPLAY)')}"
+    )
+    print(f"Chart: {args.chart} / Pais: {args.country}")
+    print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    print("=" * 70)
+
+    ensure_directories()
+    setup_local_logging()
+
+    week_id = args.week or get_week_identifier()
+    if not args.force and week_already_done(week_id):
+        log.info(
+            "Semana %s ya tiene datos reales. Saltando (usa --force para re-scrapear).",
+            week_id,
+        )
+        return 0
+    log.info("Semana: %s | base=%s", week_id, BASE_DIR)
+
+    print("\n0. VERIFICANDO ENTORNO...")
+    import importlib.util
+
+    if importlib.util.find_spec("playwright") is None:
+        log.error("Playwright no esta instalado. pip install playwright")
+        return 1
+
+    playwright_ready = install_playwright()
+    if not playwright_ready:
+        log.error("No se pudo preparar Playwright")
+        return 1
+
+    # Determinar modo
+    if args.headless:
+        effective_show_browser = False
+        log.warning("--headless explicito: Google mostrara captcha con mas frecuencia.")
+    elif args.terminal:
+        if not has_display():
+            log.error(
+                "--terminal en CI requiere xvfb-run -a (DISPLAY). Sin DISPLAY el scraper seria headless y Google mostraria captcha."
+            )
+            log.error(
+                'Invoca asi: xvfb-run -a --server-args="-screen 0 1920x1080x24" python scripts/1.py --terminal'
+            )
+            return 1
+        effective_show_browser = True
+        log.info(
+            "Modo TERMINAL + DISPLAY=%s (xvfb): HEADED.",
+            os.environ.get("DISPLAY"),
+        )
+    else:
+        effective_show_browser = True
+        log.info("Modo ventana (headed) por defecto.")
+
+    use_chrome = args.use_chrome
+    if use_chrome and not _chrome_available():
+        log.warning(
+            "--use-chrome pedido pero Chrome no esta instalado. Usando Chromium de Playwright."
+        )
+        use_chrome = False
+
+    print("\n1. DESCARGANDO YOUTUBE CHARTS...")
+    try:
+        csv_path = asyncio.run(
+            download_youtube_charts(
+                chart=args.chart,
+                country=args.country,
+                show_browser=effective_show_browser,
+                use_chrome=use_chrome,
+                keep_profile=not args.no_profile,
+                terminal_mode=args.terminal,
+            )
+        )
+    except Exception as e:
+        log.error("Error en descarga: %s", e, exc_info=True)
+        csv_path = None
+
+    print("\n2. VALIDANDO CSV...")
+    if csv_path is None or not Path(csv_path).exists():
+        log.error("CRITICO: no se obtuvo el chart real. No se guarda nada en la DB.")
+        return 2
+
+    with open(csv_path, "r", encoding="utf-8", errors="ignore") as f:
+        num_songs = max(sum(1 for _ in f) - 1, 0)
+    log.info("Canciones en CSV: %d", num_songs)
+    if num_songs < args.min_rows:
+        log.error(
+            "CSV con %d canciones (< %d). Abortando sin guardar en la DB.",
+            num_songs,
+            args.min_rows,
+        )
+        return 2
+
+    print("\n3. GUARDANDO EN SQLITE...")
+    if not update_sqlite_database(Path(csv_path), week_id):
+        log.error("Error critico actualizando la DB")
+        return 1
+
+    print("\n4. LIMPIANDO ARCHIVOS VIEJOS...")
+    cleanup_old_backups(7)
+    cleanup_old_databases(52)
+
+    print("\n5. RESUMEN FINAL:")
+    list_available_databases()
+
+    print("\n" + "=" * 70)
+    print("PROCESO COMPLETADO - DATOS REALES")
+    print("=" * 70)
+    return 0
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    code = _main_inner(argv)
+    argv_list = list(argv) if argv is not None else sys.argv[1:]
+    if "--open-folder" in argv_list and code == 0:
+        open_folder_local(ARCHIVE_DIR)
+    is_non_interactive = (
+        os.environ.get("GITHUB_ACTIONS") == "true" or "--terminal" in argv_list
+    )
+    if not is_non_interactive:
+        try:
+            has_tty = sys.stdin.isatty()
+        except Exception:
+            has_tty = False
+        if "--pause" in argv_list or not has_tty:
+            try:
+                input("\nPresiona Enter para cerrar...")
+            except Exception:
+                pass
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
