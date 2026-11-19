@@ -1,5 +1,5 @@
 """
-YouTube Charts Data Scraper - v5 FULL (Proxy + Argumentos Completos)
+YouTube Charts Data Scraper - v6 FULL (Proxy + Robustez Completa)
 ============================================================================
 """
 
@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import json
 import logging
 import os
 import platform
@@ -17,6 +18,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -77,11 +79,9 @@ COLUMN_ALIASES = {
     "video url": "YouTube URL",
 }
 
-
 def ensure_directories() -> None:
     for p in [OUTPUT_DIR, ARCHIVE_DIR, DATABASE_DIR, BACKUP_DIR, LOGS_DIR]:
         p.mkdir(parents=True, exist_ok=True)
-
 
 def setup_file_logging() -> None:
     try:
@@ -94,11 +94,9 @@ def setup_file_logging() -> None:
     except Exception as e:
         log.warning("No se pudo crear log en archivo: %s", e)
 
-
 def has_display() -> bool:
     if not IS_LINUX: return True
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-
 
 def _chrome_available() -> bool:
     return bool(
@@ -106,7 +104,6 @@ def _chrome_available() -> bool:
         or shutil.which("google-chrome-stable")
         or Path("/opt/google/chrome/chrome").exists()
     )
-
 
 def get_browser_args() -> list:
     args = [
@@ -120,13 +117,11 @@ def get_browser_args() -> list:
         args.extend(["--no-sandbox", "--disable-dev-shm-usage"])
     return args
 
-
 # ---------------------------------------------------------------------------
 # PARSING HELPERS
 # ---------------------------------------------------------------------------
 def _clean_text(value: Any) -> str:
     return "" if value is None else str(value).strip()
-
 
 def _parse_views(value: Any) -> Optional[int]:
     if value is None or value == "": return None
@@ -146,7 +141,6 @@ def _parse_views(value: Any) -> Optional[int]:
             except ValueError: return None
         return None
 
-
 def _parse_int(value: Any) -> Optional[int]:
     if value is None or value == "": return None
     if isinstance(value, int): return value
@@ -155,7 +149,6 @@ def _parse_int(value: Any) -> Optional[int]:
     if not s or s == "-": return None
     try: return int(s)
     except ValueError: return None
-
 
 def _normalize_row(raw: Dict[str, Any], rank_fallback: int = 0) -> Dict[str, Any]:
     out: Dict[str, Any] = {c: "" for c in CANONICAL_COLUMNS}
@@ -181,7 +174,6 @@ def _normalize_row(raw: Dict[str, Any], rank_fallback: int = 0) -> Dict[str, Any
         out["YouTube URL"] = f"https://www.youtube.com/watch?v={raw['videoId']}"
     return out
 
-
 def save_rows_to_csv(rows: List[Dict[str, Any]], path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     normalized = [_normalize_row(r, i + 1) for i, r in enumerate(rows)]
@@ -191,7 +183,6 @@ def save_rows_to_csv(rows: List[Dict[str, Any]], path: Path) -> Path:
         writer.writerows(normalized)
     log.info("CSV guardado: %s (%d filas)", path, len(normalized))
     return path
-
 
 def _read_csv_normalized(csv_path: Path) -> List[Dict[str, Any]]:
     rows = []
@@ -205,7 +196,6 @@ def _read_csv_normalized(csv_path: Path) -> List[Dict[str, Any]]:
             break
         except UnicodeDecodeError: continue
     return rows
-
 
 # ---------------------------------------------------------------------------
 # SQLITE
@@ -223,13 +213,11 @@ def create_backup_before_update(week_id: str) -> Optional[Path]:
         log.warning("Error creando backup: %s", e)
         return None
 
-
 def cleanup_old_backups(days: int = 7) -> None:
     if not BACKUP_DIR.exists(): return
     cutoff = datetime.now() - timedelta(days=days)
     for backup in BACKUP_DIR.glob("backup_*.db"):
         if backup.stat().st_mtime < cutoff.timestamp(): backup.unlink()
-
 
 def cleanup_old_databases(weeks: int = 52) -> None:
     if not DATABASE_DIR.exists(): return
@@ -241,7 +229,6 @@ def cleanup_old_databases(weeks: int = 52) -> None:
             if datetime.fromisocalendar(int(year_str), int(week_str), 1) < cutoff:
                 db.unlink()
         except Exception: pass
-
 
 def update_sqlite_database(csv_path: Path, week_id: str) -> Optional[Path]:
     rows = _read_csv_normalized(Path(csv_path))
@@ -291,9 +278,8 @@ def update_sqlite_database(csv_path: Path, week_id: str) -> Optional[Path]:
         log.error("Error SQLite: %s", e)
         return None
 
-
 # ---------------------------------------------------------------------------
-# EXTRACCION DOM
+# EXTRACCION DOM (Completa)
 # ---------------------------------------------------------------------------
 _JS_EXTRACT_DOM = r"""
 () => {
@@ -310,42 +296,129 @@ _JS_EXTRACT_DOM = r"""
   };
   collect(document);
 
+  // 1) Tablas
+  const tableRows = document.querySelectorAll('table tbody tr');
+  if (tableRows.length >= 20) {
+    tableRows.forEach((tr, idx) => {
+      const cells = Array.from(tr.querySelectorAll('td, th')).map((c) => c.innerText.trim()).filter(Boolean);
+      const link = tr.querySelector('a[href]');
+      const href = link ? link.getAttribute('href') : '';
+      if (cells.length >= 2) {
+        rows.push({
+          Rank: idx + 1,
+          'Track Name': cells[1] || '',
+          'Artist Names': cells[2] || '',
+          'Views': cells[3] || '',
+          'YouTube URL': href || '',
+        });
+      }
+    });
+    if (rows.length >= 20) return rows;
+  }
+
+  // 2) Filas de chart por clase
+  const rowCands = allEls.filter((el) => {
+    const cls = (el.className || '').toString().toLowerCase();
+    return cls.includes('chart-row') || cls.includes('chart-item') || cls.includes('row-chart');
+  });
+  for (const rowEl of rowCands) {
+    const txt = getText(rowEl);
+    if (!txt || txt.length < 10 || txt.length > 500) continue;
+    const lines = txt.split('\n').map((s) => s.trim()).filter(Boolean);
+    if (lines.length < 3) continue;
+    let rank = parseInt(lines[0], 10);
+    if (isNaN(rank) || rank < 1 || rank > 200) {
+      const m = txt.match(/^\s*(\d{1,3})\s/);
+      if (!m) continue;
+      rank = parseInt(m[1], 10);
+    }
+    const hrefEl = rowEl.querySelector ? rowEl.querySelector('a[href*="watch"], a[href*="youtu"]') : null;
+    let href = hrefEl ? hrefEl.getAttribute('href') || '' : '';
+    if (!href) {
+      const a2 = rowEl.querySelector ? rowEl.querySelector('a[href]') : null;
+      if (a2) href = a2.getAttribute('href') || '';
+    }
+    let vid = '';
+    if (href) {
+      const mm = href.match(/v=([A-Za-z0-9_-]{11})/) || href.match(/youtu\.be\/([A-Za-z0-9_-]{11})/);
+      if (mm) vid = mm[1];
+    }
+    let title = '', artist = '', viewsRaw = '';
+    const nonRank = lines.filter((l) => !/^\d+$/.test(l));
+    if (nonRank.length >= 1) title = nonRank[0];
+    if (nonRank.length >= 2) artist = nonRank[1];
+    for (const l of lines) {
+      if (/[\d,.]+\s*[KMB]?\s*(views|reproducciones|vistas)/i.test(l) || /^[\d,.]+[KMB]?$/.test(l)) viewsRaw = l;
+    }
+    if (title && artist) {
+      const key = rank + '|' + title;
+      if (!seen.has(key)) {
+        seen.add(key);
+        rows.push({
+          Rank: rank,
+          'Track Name': title,
+          'Artist Names': artist,
+          'Views': viewsRaw,
+          'Views Raw': viewsRaw,
+          'YouTube URL': vid ? 'https://www.youtube.com/watch?v=' + vid : href,
+          videoId: vid,
+        });
+      }
+    }
+  }
+  if (rows.length >= 20) {
+    rows.sort((a, b) => a.Rank - b.Rank);
+    return rows;
+  }
+
+  // 3) Links a videos
   for (const el of allEls) {
     if (el.tagName !== 'A') continue;
     const href = el.getAttribute('href') || '';
     if (!href) continue;
-    const m = href.match(/v=([A-Za-z0-9_-]{11})/) || href.match(/youtu\.be\/([A-Za-z0-9_-]{11})/);
+    const m =
+      href.match(/v=([A-Za-z0-9_-]{11})/) ||
+      href.match(/youtu\.be\/([A-Za-z0-9_-]{11})/) ||
+      href.match(/\/watch\/([A-Za-z0-9_-]{11})/);
     const vid = m ? m[1] : '';
     const container = el.closest ? el.closest('tr, li, [role="row"], [class*="row"], [class*="item"], [class*="chart"]') : null;
     const text = container ? container.innerText : getText(el);
-    const lines = (text || '').split('\n').map(s => s.trim()).filter(Boolean);
+    const lines = (text || '').split('\n').map((s) => s.trim()).filter(Boolean);
     if (vid) {
       if (seen.has(vid)) continue;
       seen.add(vid);
     } else {
       if (lines.length < 3) continue;
-      const key = (getText(el) + '|' + lines.join('|')).slice(0,200);
+      const key = (getText(el) + '|' + lines.join('|')).slice(0, 200);
       if (seen.has(key)) continue;
       if (!/[0-9]/.test(text)) continue;
       seen.add(key);
     }
-    let title = (el.getAttribute('aria-label') || getText(el) || '').trim().split('\n')[0] || (lines[1] || lines[0] || '');
+    let title = (el.getAttribute('aria-label') || getText(el) || '').trim().split('\n')[0] || lines[1] || lines[0] || '';
     title = title.replace(/^\d+\.\s*/, '').replace(/^\d+\s+/, '');
     let artist = '', viewsRaw = '';
     for (const l of lines) {
       if (/[\d,.]+\s*[KMB]?\s*(views|reproducciones|vistas)/i.test(l)) viewsRaw = l;
     }
     for (const l of lines) {
-      if (l !== title && l !== viewsRaw && !/^\d+$/.test(l) && l.length > 1 && l.length < 90) { artist = l; break; }
+      if (l !== title && l !== viewsRaw && !/^\d+$/.test(l) && l.length > 1 && l.length < 90) {
+        artist = l;
+        break;
+      }
     }
     rows.push({
-      Rank: rows.length+1, 'Track Name': title, 'Artist Names': artist, 'Views': viewsRaw, 'Views Raw': viewsRaw, 'YouTube URL': vid ? 'https://www.youtube.com/watch?v=' + vid : href
+      Rank: rows.length + 1,
+      'Track Name': title,
+      'Artist Names': artist,
+      'Views': viewsRaw,
+      'Views Raw': viewsRaw,
+      'YouTube URL': vid ? 'https://www.youtube.com/watch?v=' + vid : href,
+      videoId: vid,
     });
   }
   return rows;
 }
 """
-
 
 async def _extract_via_dom(page) -> List[Dict[str, Any]]:
     try:
@@ -365,7 +438,6 @@ async def _extract_via_dom(page) -> List[Dict[str, Any]]:
     except Exception as e:
         log.info("Extraccion DOM fallo: %s", e)
         return []
-
 
 async def _get_page_text_with_shadow(page) -> str:
     try:
@@ -398,7 +470,6 @@ async def _get_page_text_with_shadow(page) -> str:
         return txt or ""
     except Exception: return ""
 
-
 async def _detect_captcha(page) -> bool:
     try:
         shadow_txt = await _get_page_text_with_shadow(page)
@@ -421,9 +492,8 @@ async def _detect_captcha(page) -> bool:
         return False
     except Exception: return False
 
-
 # ---------------------------------------------------------------------------
-# DESCARGA PRINCIPAL (CON SOPORTE DE PROXY)
+# DESCARGA (CON PROXY Y REINTENTOS)
 # ---------------------------------------------------------------------------
 async def download_youtube_charts(chart: str, country: str, show_browser: bool, use_chrome: bool, terminal_mode: bool, wait_s: int) -> Optional[Path]:
     try:
@@ -440,6 +510,10 @@ async def download_youtube_charts(chart: str, country: str, show_browser: bool, 
     proxy_config = None
     
     if proxy_server and proxy_user and proxy_pass:
+        # Aseguramos que el server tenga el formato correcto (sin http:// si viene de la UI de Webshare)
+        if not proxy_server.startswith("http"):
+            proxy_server = f"http://{proxy_server}"
+            
         proxy_config = {
             "server": proxy_server,
             "username": proxy_user,
@@ -464,7 +538,14 @@ async def download_youtube_charts(chart: str, country: str, show_browser: bool, 
         if use_chrome and _chrome_available():
             launch_kwargs["channel"] = "chrome"
 
-        browser = await p.chromium.launch(**launch_kwargs)
+        try:
+            browser = await p.chromium.launch(**launch_kwargs)
+        except Exception as e:
+            log.error("Fallo al lanzar el navegador con proxy: %s", e)
+            log.info("Reintentando SIN proxy...")
+            launch_kwargs.pop("proxy", None)
+            browser = await p.chromium.launch(**launch_kwargs)
+
         context = await browser.new_context(
             viewport={"width": 1920, "height": 1080},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -487,7 +568,12 @@ async def download_youtube_charts(chart: str, country: str, show_browser: bool, 
         try:
             for url in urls:
                 log.info("Navegando a %s", url)
-                await page.goto(url, wait_until="domcontentloaded", timeout=90000)
+                try:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=90000)
+                except Exception as e:
+                    log.error("Error de red al navegar: %s", e)
+                    continue # Pasa a la siguiente URL
+                
                 await page.wait_for_timeout(8000)
                 
                 # Poll esperando el chart
@@ -521,12 +607,11 @@ async def download_youtube_charts(chart: str, country: str, show_browser: bool, 
             
     return None
 
-
 # ---------------------------------------------------------------------------
-# MAIN COMPLETO CON ARGPARSE Y LÓGICA
+# MAIN
 # ---------------------------------------------------------------------------
 def main() -> int:
-    parser = argparse.ArgumentParser(description="YouTube Charts Scraper v5")
+    parser = argparse.ArgumentParser(description="YouTube Charts Scraper v6")
     parser.add_argument("--country", default="global")
     parser.add_argument("--chart", default="TopSongs")
     parser.add_argument("--week", default=None)
