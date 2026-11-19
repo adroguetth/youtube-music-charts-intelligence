@@ -1,14 +1,6 @@
 """
-YouTube Charts Data Scraper - v5 FINAL (GitHub Actions + Proxy Webshare)
+YouTube Charts Data Scraper - v5 FULL (Proxy + Argumentos Completos)
 ============================================================================
-Scraper para YouTube Charts con soporte para proxy residencial.
-Disenado para correr en GitHub Actions (usando xvfb-run + proxy) o en local.
-
-Uso en GitHub Actions:
-    xvfb-run -a --server-args="-screen 0 1920x1080x24" python scripts/1.py --terminal
-
-Uso en Local (con ventana):
-    python scripts/1.py --show-browser
 """
 
 from __future__ import annotations
@@ -24,7 +16,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import urllib.request
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -47,7 +39,6 @@ try:
 except NameError:
     BASE_DIR = Path.cwd()
 
-# Si el archivo esta en scripts/, la raiz es el padre
 if BASE_DIR.name == "scripts":
     BASE_DIR = BASE_DIR.parent
 
@@ -105,8 +96,7 @@ def setup_file_logging() -> None:
 
 
 def has_display() -> bool:
-    if not IS_LINUX:
-        return True
+    if not IS_LINUX: return True
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
@@ -139,20 +129,16 @@ def _clean_text(value: Any) -> str:
 
 
 def _parse_views(value: Any) -> Optional[int]:
-    if value is None or value == "":
-        return None
-    if isinstance(value, (int, float)):
-        return int(value)
+    if value is None or value == "": return None
+    if isinstance(value, (int, float)): return int(value)
     s = str(value).strip().replace(",", "").replace(" ", "")
     s = re.sub(r"(views|reproducciones|vistas)$", "", s, flags=re.I).strip()
-    if not s:
-        return None
+    if not s: return None
     mult = 1
     if s[-1] in ("K", "k"): mult, s = 1_000, s[:-1]
     elif s[-1] in ("M", "m"): mult, s = 1_000_000, s[:-1]
     elif s[-1] in ("B", "b"): mult, s = 1_000_000_000, s[:-1]
-    try:
-        return int(float(s) * mult)
+    try: return int(float(s) * mult)
     except ValueError:
         m = re.search(r"[\d.]+", s)
         if m:
@@ -162,8 +148,7 @@ def _parse_views(value: Any) -> Optional[int]:
 
 
 def _parse_int(value: Any) -> Optional[int]:
-    if value is None or value == "":
-        return None
+    if value is None or value == "": return None
     if isinstance(value, int): return value
     if isinstance(value, float): return int(value)
     s = re.sub(r"[^0-9-]", "", str(value))
@@ -177,16 +162,13 @@ def _normalize_row(raw: Dict[str, Any], rank_fallback: int = 0) -> Dict[str, Any
     for k, v in raw.items():
         key = str(k).strip().lower()
         canon = COLUMN_ALIASES.get(key, str(k).strip())
-        if canon in out:
-            out[canon] = v
-    if not _parse_int(out.get("Rank")):
-        out["Rank"] = rank_fallback
+        if canon in out: out[canon] = v
+    if not _parse_int(out.get("Rank")): out["Rank"] = rank_fallback
     views_raw = _clean_text(out.get("Views Raw") or out.get("Views"))
     parsed = _parse_views(out.get("Views"))
     if parsed is not None:
         out["Views"] = parsed
-        if not out.get("Views Raw"):
-            out["Views Raw"] = views_raw
+        if not out.get("Views Raw"): out["Views Raw"] = views_raw
     else:
         out["Views"] = ""
         out["Views Raw"] = views_raw
@@ -219,16 +201,14 @@ def _read_csv_normalized(csv_path: Path) -> List[Dict[str, Any]]:
                 reader = csv.DictReader(f)
                 if reader.fieldnames is None: return []
                 for i, raw in enumerate(reader):
-                    norm = _normalize_row(raw, i + 1)
-                    rows.append(norm)
+                    rows.append(_normalize_row(raw, i + 1))
             break
-        except UnicodeDecodeError:
-            continue
+        except UnicodeDecodeError: continue
     return rows
 
 
 # ---------------------------------------------------------------------------
-# BACKUP Y SQLITE
+# SQLITE
 # ---------------------------------------------------------------------------
 def create_backup_before_update(week_id: str) -> Optional[Path]:
     db_path = DATABASE_DIR / f"youtube_charts_{week_id}.db"
@@ -330,7 +310,6 @@ _JS_EXTRACT_DOM = r"""
   };
   collect(document);
 
-  // Buscar links de videos
   for (const el of allEls) {
     if (el.tagName !== 'A') continue;
     const href = el.getAttribute('href') || '';
@@ -366,6 +345,7 @@ _JS_EXTRACT_DOM = r"""
   return rows;
 }
 """
+
 
 async def _extract_via_dom(page) -> List[Dict[str, Any]]:
     try:
@@ -445,7 +425,7 @@ async def _detect_captcha(page) -> bool:
 # ---------------------------------------------------------------------------
 # DESCARGA PRINCIPAL (CON SOPORTE DE PROXY)
 # ---------------------------------------------------------------------------
-async def download_youtube_charts(chart: str, country: str, show_browser: bool, use_chrome: bool, terminal_mode: bool) -> Optional[Path]:
+async def download_youtube_charts(chart: str, country: str, show_browser: bool, use_chrome: bool, terminal_mode: bool, wait_s: int) -> Optional[Path]:
     try:
         from playwright.async_api import async_playwright
     except ImportError:
@@ -454,7 +434,6 @@ async def download_youtube_charts(chart: str, country: str, show_browser: bool, 
 
     filename = ARCHIVE_DIR / "latest_chart.csv"
     
-    # LEER PROXY DE VARIABLES DE ENTORNO
     proxy_server = os.environ.get("PROXY_SERVER", "").strip()
     proxy_user = os.environ.get("PROXY_USER", "").strip()
     proxy_pass = os.environ.get("PROXY_PASS", "").strip()
@@ -512,7 +491,7 @@ async def download_youtube_charts(chart: str, country: str, show_browser: bool, 
                 await page.wait_for_timeout(8000)
                 
                 # Poll esperando el chart
-                for _ in range(15):
+                for _ in range(wait_s // 3):
                     txt = await _get_page_text_with_shadow(page)
                     if "Weekly Top Songs" in txt and "Weekly views" in txt:
                         log.info("✅ Chart visible en shadow")
@@ -544,42 +523,65 @@ async def download_youtube_charts(chart: str, country: str, show_browser: bool, 
 
 
 # ---------------------------------------------------------------------------
-# MAIN
+# MAIN COMPLETO CON ARGPARSE Y LÓGICA
 # ---------------------------------------------------------------------------
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--terminal", action="store_true", help="No interactivo")
-    parser.add_argument("--show-browser", action="store_true", help="Ver ventana")
-    parser.add_argument("--use-chrome", action="store_true", help="Usar Chrome")
+    parser = argparse.ArgumentParser(description="YouTube Charts Scraper v5")
+    parser.add_argument("--country", default="global")
+    parser.add_argument("--chart", default="TopSongs")
+    parser.add_argument("--week", default=None)
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--terminal", action="store_true")
+    parser.add_argument("--show-browser", action="store_true")
+    parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--use-chrome", action="store_true")
+    parser.add_argument("--no-profile", action="store_true")
+    parser.add_argument("--wait", type=int, default=90)
+    parser.add_argument("--min-rows", type=int, default=50)
+    parser.add_argument("--pause", action="store_true")
+    parser.add_argument("--open-folder", action="store_true")
     args = parser.parse_args()
 
     ensure_directories()
     setup_file_logging()
     
-    week_id = f"{datetime.now().isocalendar()[0]}-W{datetime.now().isocalendar()[1]:02d}"
-    
+    week_id = args.week or f"{datetime.now().isocalendar()[0]}-W{datetime.now().isocalendar()[1]:02d}"
     log.info("Semana: %s | base=%s", week_id, BASE_DIR)
     
-    # Chequeo idempotencia
-    db_path = DATABASE_DIR / f"youtube_charts_{week_id}.db"
-    if db_path.exists() and "--force" not in sys.argv:
-        conn = sqlite3.connect(db_path)
-        try:
-            cnt = conn.execute("SELECT COUNT(*) FROM chart_data").fetchone()[0]
-            if cnt >= 50:
-                log.info("Semana ya tiene %d datos. Saltando.", cnt)
-                return 0
-        finally:
-            conn.close()
+    if not args.force:
+        db_path = DATABASE_DIR / f"youtube_charts_{week_id}.db"
+        if db_path.exists():
+            conn = sqlite3.connect(db_path)
+            try:
+                cnt = conn.execute("SELECT COUNT(*) FROM chart_data").fetchone()[0]
+                if cnt >= args.min_rows:
+                    log.info("Semana ya tiene %d datos. Saltando (usa --force para forzar).", cnt)
+                    return 0
+            finally:
+                conn.close()
 
-    log.info("Iniciando descarga...")
-    csv_path = asyncio.run(download_youtube_charts("TopSongs", "global", not args.terminal, args.use_chrome, args.terminal))
+    show_browser = True
+    if args.headless:
+        show_browser = False
+    elif args.terminal:
+        show_browser = has_display()
+
+    csv_path = asyncio.run(download_youtube_charts(
+        chart=args.chart,
+        country=args.country,
+        show_browser=show_browser,
+        use_chrome=args.use_chrome,
+        terminal_mode=args.terminal,
+        wait_s=args.wait
+    ))
     
     if not csv_path or not csv_path.exists():
         log.error("❌ CRITICO: No se obtuvieron datos reales.")
+        if args.pause:
+            try: input("\nPresiona Enter para cerrar...")
+            except: pass
         return 2
 
-    log.info("Guardando en SQLite...")
     if not update_sqlite_database(csv_path, week_id):
         return 1
 
@@ -587,6 +589,11 @@ def main() -> int:
     cleanup_old_databases()
     
     log.info("✅ PROCESO COMPLETADO - DATOS REALES")
+    
+    if args.pause:
+        try: input("\nPresiona Enter para cerrar...")
+        except: pass
+        
     return 0
 
 if __name__ == "__main__":
