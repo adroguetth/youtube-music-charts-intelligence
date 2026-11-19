@@ -1,105 +1,55 @@
-name: YouTube Charts - scrape semanal (runner propio)
-
-# Guardar como .github/workflows/charts-scrape.yml
-#
-# Por que runner propio: en runners hospedados por GitHub (IP de datacenter
-# Azure) reCAPTCHA Enterprise muestra captcha aunque el navegador sea headed.
-# En tu equipo (IP residencial, Chrome real, perfil con historial) no sale.
-#
-# Requisitos en el equipo del runner (una sola vez, ver instrucciones):
-#   - Google Chrome estable, xvfb y python3-venv instalados
-#   - Runner self-hosted registrado con la etiqueta "ytcharts", como servicio
-#   - Perfil "calentado": una corrida manual en ventana con
-#     YOUTUBE_PROFILE_DIR=$HOME/ytcharts/profile (resolviendo el captcha si sale)
-#
-# Seguridad: un runner propio ejecuta el codigo del repo en TU equipo. Este
-# workflow solo corre por schedule o manualmente (nunca por pull_request).
+name: YouTube Charts Scraper
 
 on:
   schedule:
-    - cron: '0 15 * * 6'   # sabados 15:00 UTC; ajusta al dia en que YouTube publica
+    - cron: '0 6 * * 1'   # lunes 6:00 UTC
   workflow_dispatch:
-    inputs:
-      chart:
-        description: 'Chart'
-        required: false
-        default: 'TopSongs'
-      country:
-        description: 'Pais'
-        required: false
-        default: 'global'
-      commit:
-        description: 'Hacer commit de CSV y bases al repo'
-        type: boolean
-        default: false
 
 permissions:
   contents: write
 
-# Un solo scrape a la vez: el perfil de Chrome no admite dos procesos.
-concurrency:
-  group: ytcharts-scrape
-  cancel-in-progress: false
-
 jobs:
   scrape:
-    runs-on: [self-hosted, linux, ytcharts]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Preparar entorno (venv y perfil FUERA del workspace)
-        run: |
-          set -euo pipefail
-          # checkout hace git clean -ffdx: nada importante puede vivir en el workspace
-          mkdir -p "$HOME/ytcharts/profile"
-          [ -x "$HOME/ytcharts/venv/bin/python" ] || python3 -m venv "$HOME/ytcharts/venv"
-          "$HOME/ytcharts/venv/bin/pip" install -q --upgrade pip
-          "$HOME/ytcharts/venv/bin/pip" install -q -r requirements-ci.txt
-          command -v xvfb-run >/dev/null || { echo "ERROR: falta xvfb (sudo apt install xvfb)"; exit 1; }
-          if ! command -v google-chrome >/dev/null && ! command -v google-chrome-stable >/dev/null; then
-            echo "ERROR: falta Google Chrome estable en el equipo del runner"; exit 1
-          fi
-
-      - name: Scrapear chart
-        env:
-          CHART: ${{ inputs.chart || 'TopSongs' }}
-          COUNTRY: ${{ inputs.country || 'global' }}
-        run: |
-          export YOUTUBE_PROFILE_DIR="$HOME/ytcharts/profile"
-          # Pantalla virtual 1920x1080x24: Chrome corre HEADED (no headless)
-          xvfb-run -a -s "-screen 0 1920x1080x24" \
-            "$HOME/ytcharts/venv/bin/python" scripts/1.py \
-              --terminal --use-chrome --force \
-              --chart "$CHART" --country "$COUNTRY"
-          echo "--- RESULTADO ---"
-          ls -lh charts_archive/1_download-chart/latest_chart.csv
-          wc -l charts_archive/1_download-chart/latest_chart.csv
-          head -n 5 charts_archive/1_download-chart/latest_chart.csv
-
-      - name: Subir CSV + logs (incluye screenshots de debug si fallo)
-        if: always()
-        uses: actions/upload-artifact@v4
+      - uses: actions/setup-python@v5
         with:
-          name: chart-${{ github.run_id }}
-          path: |
-            charts_archive/1_download-chart/latest_chart.csv
-            logs/
-          if-no-files-found: warn
-          retention-days: 14
+          python-version: '3.11'
 
-      - name: Commit de datos
-        if: success() && (github.event_name == 'schedule' || inputs.commit == true)
+      - name: Install dependencies
         run: |
-          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install playwright pandas
+          playwright install chromium
+          sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Run scraper
+        run: |
+          xvfb-run -a --server-args="-screen 0 1920x1080x24" \
+            python 1.py --terminal --wait 90 --min-rows 50
+        # NOTA: NO uses --use-chrome en GitHub (no esta instalado).
+        # NOTA: SIEMPRE con xvfb-run (si no, --terminal = headless = captcha).
+
+      - name: Commit results
+        if: success()
+        run: |
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # Si databases/ esta en .gitignore, git add avisa y se ignora (|| true)
-          git add charts_archive/1_download-chart/latest_chart.csv charts_archive/1_download-chart/databases || true
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add charts_archive/ logs/
           if git diff --cached --quiet; then
             echo "Sin cambios que commitear"
           else
-            git commit -m "data: chart semanal $(date -u +%G-W%V)"
+            git commit -m "charts: update $(date +%G-W%V)"
             git push
           fi
+
+      - name: Upload debug artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-logs
+          path: logs/debug/
+          if-no-files-found: ignore
