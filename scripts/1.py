@@ -989,20 +989,34 @@ async def download_youtube_charts(
     ensure_directories()
     filename = ARCHIVE_DIR / "latest_chart.csv"
 
-    # --- CONFIGURACIÓN DEL PROXY RESIDENCIAL ---
+    # --- CONFIGURACIÓN DEL PROXY (Webshare IP Whitelist o User/Pass) ---
     proxy_server = os.environ.get("PROXY_SERVER", "").strip()
     proxy_user = os.environ.get("PROXY_USER", "").strip()
     proxy_pass = os.environ.get("PROXY_PASS", "").strip()
     proxy_config = None
-    if proxy_server and proxy_user and proxy_pass:
-        if not proxy_server.startswith("http"):
-            proxy_server = f"http://{proxy_server}"
+
+    if proxy_server:
+        # Limpieza profunda
+        clean_server = proxy_server.replace("http://", "").replace("https://", "").strip("/")
+        
+        # Si no tiene puerto, asumimos el 80 (común en Webshare)
+        if ":" not in clean_server:
+            clean_server = f"{clean_server}:80"
+        
+        # Playwright EXIGE el protocolo en el server
+        formatted_server = f"http://{clean_server}"
+        
         proxy_config = {
-            "server": proxy_server,
-            "username": proxy_user,
-            "password": proxy_pass,
+            "server": formatted_server,
         }
-        log.info("✅ Proxy configurado: %s", proxy_server)
+        
+        # Solo añadimos auth si AMBOS usuario y contraseña están presentes
+        if proxy_user and proxy_pass:
+            proxy_config["username"] = proxy_user
+            proxy_config["password"] = proxy_pass
+            log.info("✅ Proxy configurado CON autenticación: %s", formatted_server)
+        else:
+            log.info("✅ Proxy configurado SIN autenticación (IP Whitelist): %s", formatted_server)
     else:
         log.warning("⚠️ Sin proxy: Google bloqueará la IP de Azure con reCAPTCHA")
 
@@ -1239,7 +1253,6 @@ async def download_youtube_charts(
                     await browser.close()
             except Exception:
                 pass
-
 
 # ---------------------------------------------------------------------------
 # MAIN
