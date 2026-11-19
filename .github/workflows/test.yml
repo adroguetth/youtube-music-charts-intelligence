@@ -25,13 +25,15 @@ jobs:
           pip install playwright pandas
           playwright install chromium
           sudo apt-get update && sudo apt-get install -y xvfb
-
+          
       - name: Run scraper
+        env:
+          PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
+          PROXY_USER: ${{ secrets.PROXY_USER }}
+          PROXY_PASS: ${{ secrets.PROXY_PASS }}
         run: |
           xvfb-run -a --server-args="-screen 0 1920x1080x24" \
             python scripts/1.py --terminal --wait 90 --min-rows 50
-        # NOTA: NO uses --use-chrome en GitHub (no esta instalado).
-        # NOTA: SIEMPRE con xvfb-run (si no, --terminal = headless = captcha).
 
       - name: Commit results
         if: success()
