@@ -34,6 +34,8 @@ from __future__ import annotations
 
 import os
 import time
+from typing import Optional
+
 import requests
 
 # ============================================================================
@@ -45,7 +47,7 @@ PROMPTS = {
         "para que un redactor los convierta en un análisis ejecutivo.\n\n"
         "TABLA:\n"
         "{table}\n\n"
-        "{section_hint}\n"
+        "{section_hint}"
         "INSTRUCCIONES:\n"
         "1. Escribe un resumen en viñetas (bullet points), una por hecho. "
         "NO uses etiquetas como 'Top 1:', 'Top 2:', 'Contexto:' o 'Observación:'. "
@@ -82,7 +84,7 @@ PROMPTS = {
         "so a writer can turn them into an executive analysis.\n\n"
         "TABLE:\n"
         "{table}\n\n"
-        "{section_hint}\n"
+        "{section_hint}"
         "INSTRUCTIONS:\n"
         "1. Write a bullet-point summary, one bullet per fact. "
         "DO NOT use labels like 'Top 1:', 'Top 2:', 'Context:' or 'Observation:'. "
@@ -116,6 +118,36 @@ PROMPTS = {
 }
 
 
+# ============================================================================
+# HELPERS
+# ============================================================================
+# Frases que indican que el modelo se negó a responder. Se busca al INICIO
+# del texto (no en cualquier posición) para no rechazar bullets legítimos
+# como "The gap cannot be computed because...".
+_REFUSAL_PREFIXES = (
+    "i'm sorry", "i am sorry",
+    "i cannot", "i can't", "i can not",
+    "i'm unable", "i am unable",
+    "sorry, i",
+    "lo siento", "no puedo", "no soy capaz",
+)
+
+
+def _looks_like_refusal(text: str) -> bool:
+    if not text or len(text) < 20:
+        return True
+    head = text[:80].strip().lower()
+    return any(head.startswith(p) for p in _REFUSAL_PREFIXES)
+
+
+def _build_prompt(language: str, table_markdown: str, section_hint: str) -> str:
+    """Construye el prompt completo. section_hint va como pista opcional
+    (e.g. 'Sección: colaboraciones') para orientar el resumen."""
+    template = PROMPTS.get(language, PROMPTS["es"])
+    hint_block = f"CONTEXTO ADICIONAL:\n{section_hint}\n\n" if section_hint else ""
+    return template.format(table=table_markdown, section_hint=hint_block)
+
+
 class TableSummarizer:
     def __init__(
         self,
@@ -127,31 +159,33 @@ class TableSummarizer:
         self.google_api_key = google_api_key or os.environ.get("GOOGLE_API_KEY")
         self.meta_api_key = meta_api_key or os.environ.get("META_API_KEY")
 
-        # Rate Limiter variables (for Groq)
-        self.last_groq_request_time = 0
-        self.groq_cooldown_seconds = 60
+        # Rate limiter (Groq)
+        self.last_groq_request_time = 0.0
+        self.groq_min_interval = 20.0       # 20s entre llamadas
+        self.groq_cooldown_seconds = 60     # cooldown tras 429
 
     # ========================================================================
     # GROQ
     # ========================================================================
-    def _summarize_with_groq(self, table_markdown: str, language: str) -> tuple[str, int]:
-        """Call Groq API with Rate Limiting protection."""
+    def _summarize_with_groq(
+        self, table_markdown: str, language: str, section_hint: str = "",
+    ) -> tuple[str, int]:
         if not self.groq_api_key:
             print("   [Summarizer] No Groq API key found.")
             return "", 0
 
-        # Proactive rate limiting (avoid bursts)
-        current_time = time.time()
-        time_since_last = current_time - self.last_groq_request_time
+        # Rate limiting proactivo
+        elapsed = time.time() - self.last_groq_request_time
+        if elapsed < self.groq_min_interval:
+            time.sleep(self.groq_min_interval - elapsed)
 
-        # Wait 20 seconds between requests to stay under the 8K TPM limit.
-        # gpt-oss-120b generates reasoning tokens, so each request can consume
-        # ~1K-2K tokens. With 20s between requests, we make 3 requests per minute
-        # = ~6K tokens/min, which is safely below the 8K TPM limit.
-        if time_since_last < 20:
-            time.sleep(20 - time_since_last)
-
-        prompt = PROMPTS.get(language, PROMPTS["es"]).format(table=table_markdown)
+        try:
+            # El prompt se construye DENTRO del try para que un .format()
+            # roto no crashee el pipeline silenciosamente.
+            prompt = _build_prompt(language, table_markdown, section_hint)
+        except Exception as e:
+            print(f"   [Summarizer] Error construyendo prompt Groq: {e}")
+            return "", 0
 
         try:
             response = requests.post(
@@ -163,90 +197,92 @@ class TableSummarizer:
                 json={
                     "model": "openai/gpt-oss-120b",
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.5,
-                    "max_tokens": 1500,
+                    "temperature": 0.2,        # determinismo, no creatividad
+                    "max_tokens": 3000,         # gpt-oss genera reasoning tokens
                 },
                 timeout=90,
             )
-
             self.last_groq_request_time = time.time()
 
-            # Reactive rate limiting (if blocked)
             if response.status_code == 429:
-                print(f"   [Summarizer] ⚠️ Groq 429 (Rate Limit). Pausing {self.groq_cooldown_seconds} seconds...")
+                print(f"   [Summarizer] ⚠️ Groq 429. Cooldown {self.groq_cooldown_seconds}s...")
                 time.sleep(self.groq_cooldown_seconds)
                 return "", 0
 
             if response.status_code != 200:
-                print(f"   [Summarizer] Groq Error {response.status_code}: {response.text[:200]}")
+                print(f"   [Summarizer] Groq Error {response.status_code}: {response.text[:300]}")
                 return "", 0
 
             data = response.json()
-            summary = data["choices"][0]["message"]["content"].strip()
+            summary = (data["choices"][0]["message"]["content"] or "").strip()
             tokens_used = data.get("usage", {}).get("total_tokens", 0)
 
-            # Validate response to catch model refusals
-            refusal_phrases = ["unable to", "cannot", "i'm sorry", "i am sorry"]
-            if not summary or len(summary) < 20 or any(phrase in summary.lower() for phrase in refusal_phrases):
-                print("   [Summarizer] Groq returned a refusal or an empty response. Treating as failure.")
+            if _looks_like_refusal(summary):
+                print("   [Summarizer] Groq refusal/empty. Treating as failure.")
                 return "", 0
 
             return summary, tokens_used
 
         except requests.exceptions.Timeout:
-            print(f"   [Summarizer] Groq Timeout after 90 seconds.")
+            print("   [Summarizer] Groq timeout.")
             return "", 0
         except Exception as e:
-            print(f"   [Summarizer] Groq Exception: {type(e).__name__}: {e}")
+            print(f"   [Summarizer] Groq exception: {type(e).__name__}: {e}")
             return "", 0
 
     # ========================================================================
-    # GOOGLE (Gemma 4 B)
+    # GOOGLE (Gemma)
     # ========================================================================
-    def _summarize_with_google(self, table_markdown: str, language: str) -> tuple[str, int]:
-        """Call Google API (Gemma 4) with one retry on error 500."""
+    def _summarize_with_google(
+        self, table_markdown: str, language: str, section_hint: str = "",
+    ) -> tuple[str, int]:
         if not self.google_api_key:
             print("   [Summarizer] No Google API key found.")
             return "", 0
 
-        prompt = PROMPTS.get(language, PROMPTS["es"]).format(table=table_markdown)
+        try:
+            prompt = _build_prompt(language, table_markdown, section_hint)
+        except Exception as e:
+            print(f"   [Summarizer] Error construyendo prompt Google: {e}")
+            return "", 0
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent?key={self.google_api_key}"
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"gemma-3-27b-it:generateContent?key={self.google_api_key}"
+        )
 
-        # Try up to 2 times (1 initial + 1 retry)
         for attempt in range(1, 3):
             try:
                 response = requests.post(
                     url,
                     headers={"Content-Type": "application/json"},
-                    json={
-                        "contents": [{"parts": [{"text": prompt}]}]
-                    },
-                    timeout=120,  # Increased from 90 to 120 seconds
+                    json={"contents": [{"parts": [{"text": prompt}]}]},
+                    timeout=120,
                 )
 
                 if response.status_code != 200:
-                    print(f"   [Summarizer] Google Error {response.status_code} (attempt {attempt}/2): {response.text[:200]}")
+                    print(f"   [Summarizer] Google Error {response.status_code} "
+                          f"(attempt {attempt}/2): {response.text[:300]}")
                     if attempt == 1 and response.status_code == 500:
-                        print("   [Summarizer] Retrying in 5 seconds...")
+                        print("   [Summarizer] Reintentando en 5s...")
                         time.sleep(5)
                         continue
                     return "", 0
 
                 data = response.json()
-                summary = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                summary = (parts[0].get("text", "") if parts else "").strip()
                 tokens_used = data.get("usageMetadata", {}).get("totalTokenCount", 0)
 
-                # Validate response to catch model refusals
-                refusal_phrases = ["unable to", "cannot", "i'm sorry", "i am sorry"]
-                if not summary or len(summary) < 20 or any(phrase in summary.lower() for phrase in refusal_phrases):
-                    print("   [Summarizer] Google returned a refusal or an empty response.")
+                if _looks_like_refusal(summary):
+                    print("   [Summarizer] Google refusal/empty.")
                     return "", 0
 
                 return summary, tokens_used
 
             except Exception as e:
-                print(f"   [Summarizer] Google Exception (attempt {attempt}/2): {type(e).__name__}: {e}")
+                print(f"   [Summarizer] Google exception (attempt {attempt}/2): "
+                      f"{type(e).__name__}: {e}")
                 if attempt == 1:
                     time.sleep(5)
                     continue
@@ -255,18 +291,21 @@ class TableSummarizer:
         return "", 0
 
     # ========================================================================
-    # META (Muse Spark 1.3 Contributor, reasoning effort low)
+    # META (Muse Spark)
     # ========================================================================
-    def _summarize_with_muse_spark(self, table_markdown: str, language: str) -> tuple[str, int]:
-        """Call Meta Muse Spark API (Contributor mode, reasoning effort low)."""
+    def _summarize_with_muse_spark(
+        self, table_markdown: str, language: str, section_hint: str = "",
+    ) -> tuple[str, int]:
         if not self.meta_api_key:
             print("   [Summarizer] No Meta API key found.")
             return "", 0
 
-        prompt = PROMPTS.get(language, PROMPTS["es"]).format(table=table_markdown)
+        try:
+            prompt = _build_prompt(language, table_markdown, section_hint)
+        except Exception as e:
+            print(f"   [Summarizer] Error construyendo prompt Meta: {e}")
+            return "", 0
 
-        # URL and model per Meta's documentation:
-        # https://dev.meta.ai/docs/muse-spark
         url = "https://api.meta.ai/v1/chat/completions"
         model_id = "muse-spark-1.3-contributor"
 
@@ -280,98 +319,87 @@ class TableSummarizer:
                 json={
                     "model": model_id,
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 1,
-                    "max_tokens": 1500,
+                    "temperature": 0.2,
+                    "max_tokens": 3000,
                     "reasoning_effort": "low",
                 },
                 timeout=120,
             )
 
             if response.status_code != 200:
-                print(f"   [Summarizer] Muse Spark Error {response.status_code}: {response.text[:200]}")
+                print(f"   [Summarizer] Muse Spark Error {response.status_code}: "
+                      f"{response.text[:300]}")
                 return "", 0
 
             data = response.json()
-            
-            # FIX: Safely handle NoneType for message content.
-            # Meta's API may return None if a safety filter is triggered.
-            message_content = data.get("choices", [{}])[0].get("message", {}).get("content")
-            
+            message_content = (
+                data.get("choices", [{}])[0].get("message", {}).get("content")
+            )
             if not message_content:
-                print("   [Summarizer] Muse Spark returned empty content (NoneType).")
+                print("   [Summarizer] Muse Spark returned NoneType content.")
                 return "", 0
 
             summary = message_content.strip()
             tokens_used = data.get("usage", {}).get("total_tokens", 0)
 
-            # Validate response to catch model refusals
-            refusal_phrases = ["unable to", "cannot", "i'm sorry", "i am sorry"]
-            if not summary or len(summary) < 20 or any(phrase in summary.lower() for phrase in refusal_phrases):
-                print("   [Summarizer] Muse Spark returned a refusal or an empty response.")
+            if _looks_like_refusal(summary):
+                print("   [Summarizer] Muse Spark refusal/empty.")
                 return "", 0
 
             return summary, tokens_used
 
         except Exception as e:
-            print(f"   [Summarizer] Muse Spark Exception: {type(e).__name__}: {e}")
+            print(f"   [Summarizer] Muse Spark exception: {type(e).__name__}: {e}")
             return "", 0
 
     # ========================================================================
     # ROUTER
     # ========================================================================
-    def summarize(self, table_markdown: str, model_name: str, language: str = "es") -> tuple[str, str, int]:
+    def summarize(
+        self,
+        table_markdown: str,
+        model_name: str,
+        language: str = "es",
+        section_hint: str = "",
+    ) -> tuple[str, str, int]:
         """
         Generate a summary from a Markdown table, using the specified model
         and falling back through the chain if needed.
 
-        Parameters
-        ----------
-        table_markdown : str
-            The DataFrame converted to Markdown.
-        model_name : str
-            The model decided by `BudgetManager` ("groq_gpt_oss", "google_gemma",
-            or "muse_spark").
-        language : str
-            "es" or "en".
-
         Returns
         -------
         tuple[str, str, int]
-            (summary_text, model_used, tokens_used)
+            (summary_text, model_used, tokens_used). summary_text == "" si
+            todos fallaron.
         """
-        # Attempt 1: Groq
+        # Orden de intento según lo que pidió BudgetManager
+        order: list[str]
         if model_name == "groq_gpt_oss":
-            summary, tokens = self._summarize_with_groq(table_markdown, language)
-            if summary:
-                return summary, "groq_gpt_oss", tokens
-
-            print("   [Summarizer] Groq failed. Trying Google Gemma as fallback...")
-            summary, tokens = self._summarize_with_google(table_markdown, language)
-            if summary:
-                return summary, "google_gemma", tokens
-
-            print("   [Summarizer] Google failed. Trying Meta Muse Spark as final fallback...")
-            summary, tokens = self._summarize_with_muse_spark(table_markdown, language)
-            if summary:
-                return summary, "muse_spark", tokens
-
-        # Attempt 2: Google
+            order = ["groq_gpt_oss", "google_gemma", "muse_spark"]
         elif model_name == "google_gemma":
-            summary, tokens = self._summarize_with_google(table_markdown, language)
-            if summary:
-                return summary, "google_gemma", tokens
-
-            print("   [Summarizer] Google failed. Trying Meta Muse Spark as final fallback...")
-            summary, tokens = self._summarize_with_muse_spark(table_markdown, language)
-            if summary:
-                return summary, "muse_spark", tokens
-
-        # Attempt 3: Muse Spark (explicitly chosen by BudgetManager)
+            order = ["google_gemma", "muse_spark"]
         elif model_name == "muse_spark":
-            summary, tokens = self._summarize_with_muse_spark(table_markdown, language)
-            if summary:
-                return summary, "muse_spark", tokens
+            order = ["muse_spark"]
+        else:
+            # Nombre desconocido: intentar la cadena completa por seguridad
+            print(f"   [Summarizer] Modelo desconocido '{model_name}'. "
+                  f"Intentando cadena completa.")
+            order = ["groq_gpt_oss", "google_gemma", "muse_spark"]
 
-        # All failed
-        print("   [Summarizer] All available models failed to generate a summary.")
+        for attempt_model in order:
+            print(f"   [Summarizer] Intentando {attempt_model}...")
+            if attempt_model == "groq_gpt_oss":
+                summary, tokens = self._summarize_with_groq(table_markdown, language, section_hint)
+                if summary:
+                    return summary, "groq_gpt_oss", tokens
+            elif attempt_model == "google_gemma":
+                summary, tokens = self._summarize_with_google(table_markdown, language, section_hint)
+                if summary:
+                    return summary, "google_gemma", tokens
+            elif attempt_model == "muse_spark":
+                summary, tokens = self._summarize_with_muse_spark(table_markdown, language, section_hint)
+                if summary:
+                    return summary, "muse_spark", tokens
+
+        print("   [Summarizer] Todos los modelos fallaron.")
         return "", model_name, 0
