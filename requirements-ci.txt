@@ -1,7 +1,0 @@
-# requirements-ci.txt - SOLO para GitHub Actions test.yml
-# El requirements.txt completo tiene jupyter, selenium, etc. y tarda 2 min.
-# Este es liviano y es lo unico que necesita 1.py en modo --terminal.
-playwright==1.49.1
-pandas>=2.2.3
-requests==2.32.3
-ytmusicapi>=1.0.0
