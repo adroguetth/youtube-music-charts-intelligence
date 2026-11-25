@@ -6,8 +6,6 @@
 ![Web Scraping](https://img.shields.io/badge/Web-Scraping-orange?style=flat-square)
 ![Local Only](https://img.shields.io/badge/Local-Only-critical?style=flat-square)
 
-
-![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
 ![Python](https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white)
 ![Playwright](https://custom-icon-badges.demolab.com/badge/Playwright-2EAD33?logo=playwright&logoColor=white&style=flat-square)
 ![SQLite](https://img.shields.io/badge/SQLite-07405e?style=flat-square&logo=sqlite&logoColor=white)
@@ -21,6 +19,8 @@
 > - **Code:** [old_script.py](https://github.com/adroguetth/youtube-music-charts-intelligence/blob/main/scripts/deprecated/1_download/old_script.py)
 > - **Documentation:** [1_download.md](https://github.com/adroguetth/youtube-music-charts-intelligence/blob/main/doc_en/deprecated/1_download.md)
 > - **Workflow:** [workflow.txt](https://github.com/adroguetth/youtube-music-charts-intelligence/blob/main/scripts/deprecated/1_download/workflow.txt)
+
+> ⚠️ **Important note:** This version is **not compatible with Windows**. It requires a POSIX-compliant operating system (Linux or macOS) because it uses fcntl for process locking and relies on a Unix-like display server for headed browser execution.
 
 ## 📋 General Description
 
