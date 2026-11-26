@@ -1415,19 +1415,19 @@ git push
 
 Only `charts_archive/` is published. Never commit `.browser-profile/`, `logs/` or `data/`; all three are ignored by `.gitignore`. The profile contains session cookies and would leak access if published.
 
-## ⏰ Cron Schedule
+## ⏰ Cron Schedule and Pipeline Timeline
 
 ### Recommended schedule
 
-```cron
+```text
+┌───────────── minute (0)
+│ ┌─────────── hour (14)
+│ │ ┌───────── day of month (*)
+│ │ │ ┌─────── month (*)
+│ │ │ │ ┌───── day of week (1 = Monday)
+│ │ │ │ │
 0 12 * * 1
 ```
-
-- **Minute:** `0`
-- **Hour:** `12` (12:00 UTC)
-- **Day of month:** every
-- **Month:** every
-- **Day of week:** `1` (Monday)
 
 **Execution:** every **Monday at 12:00 UTC** in the host's local timezone.
 
@@ -1501,12 +1501,13 @@ It does **not** run on `git push`, pull requests, or CI platforms.
 
 ### Suggested weekly timeline (local host)
 
-```text
-Monday 12:00 UTC  Script 1: download charts (this stage)
-Monday 12:10 UTC  Publish charts_archive/ (git add, commit, push)
-Monday 13:00 UTC  Script 2.1: artist enrichment (when implemented)
-Monday 14:00 UTC  Script 2.2: song catalog (when implemented)
-...
+| Time (UTC) | Stage | Where |
+| :--- | :--- | :--- |
+| **12:00** | **Script 1 — download weekly charts** | Local host (not CI) |
+| 13:00 | Script 2.1 — update artist database | GitHub Actions |
+| 14:00 | Script 2.2 — build song catalog (this workflow) | GitHub Actions |
+| 15:00 | Script 3 — enrich chart data | GitHub Actions |
+| Manual | Script 4 — generate reports/notebooks | GitHub Actions |
 ```
 The exact downstream times depend on your pipeline. The only hard constraint is that Script 1 must finish before any stage that consumes the weekly database.
 
