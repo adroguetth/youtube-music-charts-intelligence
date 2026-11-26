@@ -23,7 +23,7 @@
 > - **Documentation:** [1_download.md](https://github.com/adroguetth/youtube-music-charts-intelligence/blob/main/doc_en/deprecated/1_download.md)
 > - **Workflow:** [workflow.txt](https://github.com/adroguetth/youtube-music-charts-intelligence/blob/main/scripts/deprecated/1_download/workflow.txt)
 
-> ⚠️ **Important note:** This version is **not compatible with Windows**. It requires a POSIX-compliant operating system (Linux or macOS) because it uses fcntl for process locking and relies on a Unix-like display server for headed browser execution.
+> ⚠️ **Important note**: This version is not compatible with Windows. It requires a POSIX-compliant operating system (Linux or macOS) because it uses fcntl for process locking and relies on a Unix-like display server for headed browser execution. However, it might be compatible using WSL (Windows Subsystem for Linux) on Windows 10 or 11.
 
 ## 📋 General Description
 
