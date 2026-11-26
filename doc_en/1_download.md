@@ -1508,7 +1508,7 @@ It does **not** run on `git push`, pull requests, or CI platforms.
 | 14:00 | Script 2.2 — build song catalog (this workflow) | GitHub Actions |
 | 15:00 | Script 3 — enrich chart data | GitHub Actions |
 | Manual | Script 4 — generate reports/notebooks | GitHub Actions |
-```
+
 The exact downstream times depend on your pipeline. The only hard constraint is that Script 1 must finish before any stage that consumes the weekly database.
 
 ### Cron gotchas
