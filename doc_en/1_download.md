@@ -1,10 +1,11 @@
-# 🎵 Script 1 — YouTube Charts Weekly Downloader, Local-First Ingestion
+# 🎵 Script 1: Automated Data Acquisition from YouTube Charts
 
 ![MIT License](https://img.shields.io/badge/license-MIT-9ecae1?style=flat-square&logo=open-source-initiative&logoColor=white)
 ![ETL](https://img.shields.io/badge/ETL-9ecae1?style=flat-square)
 ![Data Ingestion](https://img.shields.io/badge/Data-Ingestion-blue?style=flat-square)
 ![Web Scraping](https://img.shields.io/badge/Web-Scraping-orange?style=flat-square)
 ![Local Only](https://img.shields.io/badge/Local-Only-critical?style=flat-square)
+![YouTube Charts](https://img.shields.io/badge/YouTube-Charts-FF0000?style=flat-square&logo=youtube&logoColor=white) 
 
 ![Python](https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white)
 ![Playwright](https://custom-icon-badges.demolab.com/badge/Playwright-2EAD33?logo=playwright&logoColor=white&style=flat-square)
