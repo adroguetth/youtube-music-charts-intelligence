@@ -2804,5 +2804,5 @@ git push origin fix/extractor-layout
 
 ---
 
-**⭐ If you find this project useful, please consider starring it on GitHub!**
+*Documentation for Script 2 — Song Catalog Builder. Last updated: 2026-11-26.*
 
