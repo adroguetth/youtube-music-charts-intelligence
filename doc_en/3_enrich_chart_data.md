@@ -1801,5 +1801,1496 @@ The per-call `pip install --upgrade yt-dlp` is the biggest risk for CI runtime. 
 | Tests in CI | None; the workflow runs the pipeline only |
 
 ---
+## ⏰ Cron Schedule and Pipeline Timeline
+
+### Recommended local schedule
+```yaml
+on:
+  schedule:
+    - cron: '0 15 * * 1'
+  workflow_dispatch:
+```
+
+```text
+┌───────────── minute (0)
+│ ┌─────────── hour (15)
+│ │ ┌───────── day of month (*)
+│ │ │ ┌─────── month (*)
+│ │ │ │ ┌───── day of week (1 = Monday)
+│ │ │ │ │
+0 15 * * 1
+```
+
+**Execution:** every **Monday at 15:00** in the host's local timezone, after Script 2.2 has updated the catalog.
+
+### Cron line
+
+```cron
+00 15 * * 1 cd /home/alfonso/youtube-music-charts-intelligence && GITHUB_ACTIONS=true .venv/bin/python -m scripts.3_enrich_chart_data >> logs/enrich.log 2>&1
+```
+
+Why each part matters:
+
+| Part | Why |
+| :--- | :--- |
+| `cd ...` | The package is invoked with `-m`; the repository root must be the working directory |
+| `GITHUB_ACTIONS=true` | Skips the interactive prompt in a non-TTY cron environment |
+| `.venv/bin/python` | Uses the operator-owned virtualenv with the dependencies installed |
+| `-m scripts.3_enrich_chart_data` | Resolves the relative imports correctly |
+
+### Execution triggers
+
+This stage runs on:
+
+- **Scheduled execution:** cron or a systemd timer, once per week.
+- **Manual execution:** the operator runs the module from the repository root.
+- **CI execution:** `.github/workflows/3_enrich-chart-data.yml` with `GITHUB_ACTIONS=true`.
+
+It does **not** run on `git push` or pull requests unless you add such a trigger. It does **not** have a `--force` flag; every run reprocesses the latest chart.
+
+### Suggested weekly timeline
+
+| Time (UTC) | Stage | Where |
+| :--- | :--- | :--- |
+| Earlier | Script 1 — download weekly charts | Local host |
+| 13:00 | Script 2.1 — artist database | GitHub Actions |
+| 14:00 | Script 2.2 — song catalog | GitHub Actions |
+| **15:00** | **Script 3 — chart enrichment (this stage)** | **GitHub Actions** |
+| ~15:10 | Publish `charts_archive/3_enrich-chart-data/` | GitHub Actions commit |
+| Manual | Script 4 — notebooks/reports | GitHub Actions |
+
+The exact downstream times depend on your pipeline. The hard constraint is that Script 3 must run after Script 1 and Script 2.2 have finished and committed their outputs. GitHub Actions cron is UTC and can start a few minutes late under load; if strict ordering is required, add a readiness check or trigger the workflow explicitly after 2.2.
+
+### Cron gotchas
+
+- **No TTY, no prompt.** Without `GITHUB_ACTIONS=true` or an API key, `input()` raises `EOFError`.
+- **`PATH` is minimal.** Use the absolute path to the virtualenv Python.
+- **The working directory matters.** `python -m` needs the repository root.
+- **Network access is required.** The API, yt-dlp, and Selenium all reach YouTube.
+- **API quota is shared.** Other jobs using the same key consume the same daily quota.
+- **Log rotation is your responsibility.** `logs/enrich.log` grows every run; use logrotate.
+- **Concurrent runs can collide.** There is no process lock in Script 3; two runs writing the same output DB can conflict. Schedule them sequentially.
+
+---
+
+## 🔑 Environment Variables and Secrets
+
+### Required secrets
+
+**None.** The pipeline works without any secret. The API layer is optional.
+
+### Optional secrets
+
+| Secret | Required? | Purpose |
+| :--- | :--- | :--- |
+| `YOUTUBE_API_KEY` | No | Enables the YouTube Data API v3 layer |
+
+Set it locally:
+
+```bash
+export YOUTUBE_API_KEY="your-key-here"
+```
+
+Set it in GitHub Actions:
+
+1. Open **Settings → Secrets and variables → Actions**.
+2. Create a repository secret named `YOUTUBE_API_KEY`.
+3. Reference it as `${{ secrets.YOUTUBE_API_KEY }}` in the workflow.
+
+Never commit the key. Never log it. The code does not print it.
+
+### Environment variables
+
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `YOUTUBE_API_KEY` | empty | Enables Layer 1 |
+| `GITHUB_ACTIONS` | empty | Must be exactly `"true"` to skip the prompt and enable CI logging |
+
+There are **no** variables for paths, timeouts, retries, layer order, or output naming. Those are code constants. See [Configuration and customization](#-configuration-and-customization).
+
+`RETENTION_WEEKS` appears only in the workflow. It is a shell-level retention setting used by the cleanup and report steps; the Python package never reads it.
+
+> **Exact match:** `IN_GITHUB_ACTIONS` is `os.environ.get("GITHUB_ACTIONS") == "true"`. Values such as `"1"`, `"TRUE"`, or `"yes"` are **not** recognized.
+
+---
+
+## 🚀 Installation and Local Setup
+
+### Prerequisites
+
+| Requirement | Why |
+| :--- | :--- |
+| **Python 3.10+** (3.12 recommended) | The code uses `int \| None` syntax, which requires 3.10+ |
+| **Script 1 output** | At least one `youtube_charts_YYYY-Www.db` in `charts_archive/1_download-chart/databases/` |
+| **Script 2.2 output** | `build_song.db` in `charts_archive/2_2.build-song-catalog/` |
+| **Network access** | YouTube API, yt-dlp, or Selenium |
+| **Google Chrome / Chromium** (optional) | Only for the Selenium layer |
+| **YouTube API key** (optional) | Only for the API layer |
+| **Disk space** | A few hundred KB per enriched DB, plus dependencies |
+
+> **Docstring discrepancy:** several module docstrings say Python 3.7+. The actual minimum is **3.10** because `__main__.py` uses `int | None`. Use 3.10+ to avoid a `SyntaxError`.
+
+### Step-by-step installation
+
+#### 1. Clone the repository
+
+```bash
+git clone https://github.com/adroguetth/youtube-music-charts-intelligence.git
+cd youtube-music-charts-intelligence
+```
+
+#### 2. Create a virtual environment
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+#### 3. Install dependencies
+
+The repository-level `requirements.txt` is the same file used by CI:
+
+```bash
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+For a Script 3-only environment, install the subset:
+
+```bash
+pip install \
+  google-api-python-client \
+  isodate \
+  yt-dlp \
+  selenium \
+  webdriver-manager
+```
+
+| Package | Layer | Auto-installed by the code? | Purpose |
+| :--- | :--- | :-: | :--- |
+| `google-api-python-client` | API | ❌ | `googleapiclient.discovery.build` |
+| `isodate` | API | ✅ (if missing) | ISO 8601 duration parsing |
+| `yt-dlp` | yt-dlp | ✅ (if missing, and upgraded per call) | Video metadata extraction |
+| `selenium` | Selenium | ✅ (if missing) | Browser automation |
+| `webdriver-manager` | Selenium | ✅ (if missing) | ChromeDriver download |
+| `sqlite3` | All | stdlib | Database access |
+
+The workflow installs the repository-wide file, which also pulls the dependencies for Scripts 1, 2.1, 4, and 5; Script 2.2 uses the standard library. The five-package subset above is enough for local Script 3 runs. Preinstalling is strongly recommended for CI and offline runs: it avoids runtime pip installs, PEP 668 failures, and the per-song yt-dlp upgrade.
+
+#### 4. Optional: install Chrome / Chromium
+
+Selenium needs a browser and a compatible driver:
+
+```bash
+google-chrome --version
+# or
+chromium --version
+```
+
+On Debian/Ubuntu:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y chromium-browser
+```
+
+`webdriver-manager` downloads the matching ChromeDriver on demand. If your environment blocks that download, install the driver manually and adjust the Selenium layer.
+
+#### 5. Verify the inputs
+
+```bash
+ls -lah charts_archive/1_download-chart/databases/*.db
+ls -lah charts_archive/2_2.build-song-catalog/build_song.db
+```
+
+You should see at least one weekly chart database and the catalog. If either is missing, run the corresponding upstream stage first.
+
+#### 6. Compile and smoke-test
+
+```bash
+python -m compileall -q scripts/3_enrich_chart_data
+```
+
+There is **no `--help` flag**; the package has no argument parser. Running `python -m scripts.3_enrich_chart_data --help` starts the pipeline and ignores `--help`.
+
+Programmatic smoke test:
+
+```bash
+python - <<'PY'
+import importlib
+
+pkg = importlib.import_module("scripts.3_enrich_chart_data")
+print("version:", pkg.__version__)
+print("fetch_video_metadata:", callable(pkg.fetch_video_metadata))
+PY
+```
+
+### First run
+
+```bash
+export YOUTUBE_API_KEY="your-key-here"   # optional but recommended
+python -m scripts.3_enrich_chart_data
+```
+
+- With an API key, Layer 1 handles the metadata and the run is fast.
+- Without a key and outside CI, the script asks `Continue anyway? (y/n)`.
+- Without a key in CI (`GITHUB_ACTIONS=true`), the prompt is skipped and yt-dlp/Selenium are used.
+- A successful run prints the summary and writes `charts_archive/3_enrich-chart-data/youtube_charts_YYYY-Www_enriched.db`.
+
+### Disk usage expectations
+
+| Item | Typical size | Notes |
+| :--- | :--- | :--- |
+| Enriched SQLite DB | ~50–150 KB per 100 rows | Depends on text length and indexes |
+| Python dependencies | tens to hundreds of MB | Mostly Selenium/Google client libraries |
+| Chrome/Chromium | hundreds of MB | Only if Selenium is used |
+| Logs | a few KB per run | Only if you redirect stdout |
+
+The enriched database is small. The dependencies and browser dominate disk usage.
+
+---
+
+## ▶️ Running the Pipeline
+
+### Common commands
+
+```bash
+# Recommended: API layer enabled
+export YOUTUBE_API_KEY="your-key-here"
+python -m scripts.3_enrich_chart_data
+
+# Local run without a key; the script asks for confirmation
+python -m scripts.3_enrich_chart_data
+# Continue anyway? (y/n): y
+
+# Non-interactive local run without a key
+GITHUB_ACTIONS=true python -m scripts.3_enrich_chart_data
+
+# CI-style run
+GITHUB_ACTIONS=true YOUTUBE_API_KEY="$YOUTUBE_API_KEY" \
+  python -m scripts.3_enrich_chart_data
+
+# Inspect the output directory
+ls -lah charts_archive/3_enrich-chart-data/
+```
+
+> **There are no CLI flags.** The pipeline does not read `sys.argv`. `--week`, `--limit`, `--dry-run`, `--force`, `--no-selenium`, and `--help` are silently ignored. Behavior is controlled by the environment and by editing `config.py` or the code.
+
+### Exit codes
+
+| Code | Meaning | Typical cause |
+| :-: | :--- | :--- |
+| `0` | Success | The pipeline completed and printed the summary |
+| `1` | Failure | Input directory/file missing, `chart_data` missing or invalid, or an unhandled exception |
+| `130` | Interrupted | `Ctrl+C` / SIGINT (Python default; not caught explicitly) |
+
+There are no distinct codes for "catalog missing" or "metadata failed": those conditions are non-fatal and produce warnings or `error` values, not a non-zero exit.
+
+### Scenario behavior
+
+| Scenario | Behavior |
+| :--- | :--- |
+| Latest chart DB exists, catalog exists | Normal enrichment |
+| Latest chart DB missing | Phase 1 logs the error and returns `1` |
+| `chart_data` table missing | Phase 4 logs the error and returns `1` |
+| Required chart columns missing | Phase 4 raises and returns `1` |
+| Catalog DB missing | Warning; continues with `id = NULL`, `Unknown`, `Pop`, `0/0` |
+| `artist_track` table missing | Error; continues with an empty lookup |
+| API key missing | Layer 1 skipped; yt-dlp → Selenium |
+| API key invalid/quota exhausted | Layer 1 fails; yt-dlp → Selenium |
+| yt-dlp blocked | Selenium |
+| Selenium unavailable | Row written with zeroed metadata and an error |
+| Chart has zero rows | Summary divides by zero; process exits `1` |
+| Output DB exists | Table is dropped and recreated |
+| Two runs overlap | No lock; the second run can conflict with the first |
+
+### Reprocessing an older week
+
+The pipeline always selects the lexicographically highest `.db` in `INPUT_DB_DIR`. There is no `--week` flag. To process an older week:
+
+1. **Isolate the desired database.** Move or copy it into a directory that contains only that chart DB and point `INPUT_DB_DIR` to it (edit `config.py` or monkeypatch the module).
+2. **Temporarily move newer databases** out of `INPUT_DB_DIR`, run the pipeline, then restore them.
+3. **Add a `--week` option** to the code (see [Configuration and customization](#-configuration-and-customization)).
+
+The output filename is derived from the selected input stem, so `youtube_charts_2026-W47.db` becomes `youtube_charts_2026-W47_enriched.db`.
+
+### Re-running after a catalog update
+
+Script 2.2 may add new songs or repair country/genre values. To propagate those changes:
+
+```bash
+python -m scripts.3_enrich_chart_data
+```
+
+The output table is recreated, so the new catalog values are picked up. There is no incremental mode.
+
+---
+
+## 📤 Expected Output
+
+### Illustrative console output
+
+The exact counts depend on the chart, catalog, and metadata layers. A representative run looks like this:
+
+```text
+======================================================================
+🎵 CHART ENRICHMENT PIPELINE (API → Selenium → yt-dlp)
+   METADATA EXTRACTION + CATALOG INTEGRATION
+📅 2026-11-23 15:00:12
+======================================================================
+
+1. 📂 LOCATING LATEST CHART DATABASE...
+   ✅ Found: youtube_charts_2026-W48.db
+
+2. 📀 LOADING SONG CATALOG...
+📀 Loading song catalog for ID mapping from: .../charts_archive/2_2.build-song-catalog/build_song.db
+   ✅ Loaded 164 songs from catalog.
+   📋 Sample entries from catalog (first 5):
+      1. ID  293 | Wiz Khalifa - See You Again (feat. Charlie...
+         🌍 United States | 🎵 Hip-Hop/Rap | 👥 1/1
+      2. ID  294 | Bad Bunny - Tití Me Preguntó
+         🌍 Puerto Rico | 🎵 Reggaetón/Trap Latino | 👥 1/1
+      ...
+
+3. 🔧 CHECKING DEPENDENCIES...
+   ✅ yt-dlp available
+
+4. 📖 READING CHART DATA FROM youtube_charts_2026-W48.db...
+   ✅ 100 songs loaded
+
+5. 🗃️  PREPARING OUTPUT DATABASE...
+   ✅ Output path: .../charts_archive/3_enrich-chart-data/youtube_charts_2026-W48_enriched.db
+
+6. 🎬 ENRICHING 100 SONGS...
+   ⏱️  This may take several minutes depending on the retrieval layer used...
+   [ 1/100] Song Title...                    (⏱️3:47 📀 👥2 🌍Un 🆔293) → United States, Hip-Hop/Rap
+   [ 2/100] Another Song...                  (⏱️2:58 📝 🌍Pu 🆔294) → Puerto Rico, Reggaetón/Trap Latino
+   ...
+   [100/100] Last Song...                    (⏱️4:12 🌍Ch 🆔401) → Chile, Pop
+
+7. 📊 FINAL SUMMARY:
+   💾 Output database: .../charts_archive/3_enrich-chart-data/youtube_charts_2026-W48_enriched.db
+      📊 Total songs:              100
+      🌐 Multi-country collabs:    6 (6.0%)
+      🗺️  Distinct countries:       24
+      🎵 Distinct genres:          15
+      ❓ Songs with unknown country: 3 (3.0%)
+      ⚠️  Songs with metadata errors: 1 (1.0%)
+      🆔 Songs with catalog ID:      98 (98.0%)
+
+======================================================================
+✅ ENRICHMENT PIPELINE COMPLETED SUCCESSFULLY
+======================================================================
+```
+
+> **Banner note:** the first line says `API → Selenium → yt-dlp`, but the actual order is **API → yt-dlp → Selenium**. This is a cosmetic bug in the banner, not a behavior change.
+
+### Files written
+
+| File | When | Notes |
+| :--- | :--- | :--- |
+| `charts_archive/3_enrich-chart-data/youtube_charts_YYYY-Www_enriched.db` | Every successful run | Created if missing; table recreated |
+| SQLite journal/WAL files | Transient | Removed after commits |
+| CI artifact | Failed workflow runs only | Debug ZIP with the DB and package source; 7-day retention |
+
+Script 3 does **not** write CSV files, log files, or per-song JSON. It writes only the enriched SQLite database.
+
+### Summary metrics
+
+| Metric | Query | Interpretation |
+| :--- | :--- | :--- |
+| Total songs | `COUNT(*)` | Should equal the chart row count |
+| Multi-country collabs | `artist_country = 'Multi-country'` | Collaborations spanning countries |
+| Distinct countries | `COUNT(DISTINCT artist_country)` excluding `Unknown`/`Multi-country` | Country coverage |
+| Distinct genres | `COUNT(DISTINCT macro_genre)` excluding `Multi-genre` and `NULL` | Genre coverage; `Unknown` still counts |
+| Unknown country | `artist_country = 'Unknown'` | Catalog misses or unresolved artists |
+| Metadata errors | `error != ''` | Rows where all layers failed or returned invalid data |
+| Catalog ID present | `id IS NOT NULL` | Catalog match rate |
+
+> **Genre caveat:** unmatched songs receive `macro_genre = 'Pop'`. The summary counts them as `Pop`, so the `Pop` genre total can be inflated. There is no separate `Unknown` genre for unmatched rows.
+
+### Inspecting the output
+
+Using Python:
+
+```python
+import sqlite3
+
+db = "charts_archive/3_enrich-chart-data/youtube_charts_2026-W48_enriched.db"
+conn = sqlite3.connect(db)
+cur = conn.cursor()
+
+print("rows:", cur.execute("SELECT COUNT(*) FROM enriched_songs").fetchone()[0])
+print("errors:", cur.execute(
+    "SELECT COUNT(*) FROM enriched_songs WHERE error != ''"
+).fetchone()[0])
+
+for row in cur.execute("""
+    SELECT rank, track_name, artist_names, artist_country, macro_genre,
+           duration_s, channel_type, error
+    FROM enriched_songs
+    ORDER BY rank
+    LIMIT 5
+"""):
+    print(row)
+
+conn.close()
+```
+
+Using the `sqlite3` CLI:
+
+```bash
+sqlite3 charts_archive/3_enrich-chart-data/youtube_charts_2026-W48_enriched.db
+
+.tables
+PRAGMA table_info(enriched_songs);
+SELECT COUNT(*) FROM enriched_songs;
+SELECT * FROM enriched_songs ORDER BY rank LIMIT 5;
+```
+
+---
+
+## 🔧 Configuration and Customization
+
+### 1. Paths (`config.py`)
+
+| Setting | Default | Change when |
+| :--- | :--- | :--- |
+| `INPUT_DB_DIR` | `charts_archive/1_download-chart/databases` | Script 1 output moves |
+| `SONG_CATALOG_DB_PATH` | `charts_archive/2_2.build-song-catalog/build_song.db` | Script 2.2 output moves |
+| `OUTPUT_DIR` | `charts_archive/3_enrich-chart-data` | You want a different output location |
+
+All paths are relative to `REPO_ROOT`, which is computed from `config.py`'s location. Moving the package without moving the repository changes the resolved paths.
+
+### 2. Output filename (`__main__.py`)
+
+```python
+output_db_path = OUTPUT_DIR / f"{chart_db_path.stem}_enriched.db"
+```
+
+To change the naming scheme, edit this line. Keep the week identifier in the filename; the table itself does not store it.
+
+### 3. Add a metadata field
+
+Adding a field is a cross-cutting change. Update all of the following:
+
+1. `metadata/__init__.py` — `_empty_metadata()`.
+2. `metadata/api.py` — local defaults and assignment.
+3. `metadata/yt_dlp.py` — local defaults and assignment.
+4. `metadata/selenium.py` — local defaults and assignment (or leave the default).
+5. `metadata/detector.py` — add or extend a detector if the field is derived.
+6. `__main__.py` — add the key to the output `row` dict.
+7. `utils/db_utils.py` — add the column to `CREATE TABLE` and to the `INSERT` column/value lists.
+8. This README and any downstream schema documentation.
+
+If you skip step 7, the insert fails with a “no column” or “values” error. If you skip step 6, the field is silently dropped.
+
+### 4. Reorder the fallback layers
+
+The order is explicit in `metadata/__init__.py`. Move the blocks, or add a configuration flag:
+
+```python
+# Current order
+# 1. API
+# 2. yt-dlp
+# 3. Selenium
+```
+
+If you put Selenium before yt-dlp, expect much slower runs and more selector failures. If you remove a layer, also remove its import and its error-accumulation block.
+
+### 5. Add a new retrieval layer
+
+1. Create `metadata/my_layer.py` with a `fetch_metadata_via_my_layer(url, artists_csv) -> dict` function.
+2. Return the same 15-field schema, with `error` empty on success.
+3. Import it in `metadata/__init__.py`.
+4. Insert a `try/except` block in the desired order.
+5. Add its dependency behavior (install/check) inside the layer.
+6. Document the field coverage and failure modes.
+
+### 6. Detector keywords (`metadata/detector.py`)
+
+- **Video type:** extend the keyword lists in `detect_video_type()`.
+- **Collaboration:** extend `collab_patterns` in `detect_collaboration()`.
+- **Channel type:** extend the ordered keyword lists in `detect_channel_type()`.
+- **Season:** change the quarter boundaries in `parse_upload_season()` if your fiscal calendar differs.
+
+Because the checks are substring-based, add the most specific keywords first and test false positives.
+
+### 7. Collaboration cap
+
+```python
+"artist_count": min(artist_count, 10)
+```
+
+Change `10` to a different cap. The cap protects against malformed CSV strings with dozens of commas.
+
+### 8. API key
+
+Set `YOUTUBE_API_KEY` in the environment. To change the variable name, edit `config.py`. Do not hardcode the key in the source.
+
+### 9. Selenium selectors
+
+If YouTube changes its layout, update the selectors in `metadata/selenium.py`:
+
+| Data | Current selector |
+| :--- | :--- |
+| Title | `h1.ytd-video-primary-info-renderer` |
+| Duration | `span.ytp-time-duration` |
+| Channel | `a.ytd-channel-name` |
+| Upload date | `meta[itemprop='datePublished']` |
+
+The title wait is 10 seconds. Increase it for slow connections, but expect slower fallback runs.
+
+### 10. Database schema and indexes
+
+To add an index:
+
+```python
+cursor.execute("CREATE INDEX idx_channel_type ON enriched_songs(channel_type)")
+```
+
+To change the schema, edit `create_output_table()` and `insert_enriched_row()` together. Because the table is dropped on every run, there is no migration path to preserve; the next run creates the new schema.
+
+### 11. Add CLI arguments
+
+There is no argparse today. A minimal addition would be:
+
+```python
+import argparse
+
+def parse_args():
+    parser = argparse.ArgumentParser(prog="python -m scripts.3_enrich_chart_data")
+    parser.add_argument("--week", help="Force a chart week, e.g. 2026-W48")
+    parser.add_argument("--limit", type=int, help="Process only the first N songs")
+    parser.add_argument("--dry-run", action="store_true", help="Do not write the output DB")
+    return parser.parse_args()
+```
+
+Then pass the selected path/limit into `main()`. Keep the existing environment-driven behavior as the default.
+
+### 12. Rate limiting and sleeps
+
+The pipeline sleeps `0.1` seconds after every song:
+
+```python
+time.sleep(0.1)
+```
+
+Increase it if YouTube throttles you; decrease it only if you are using the API and understand the quota. The yt-dlp layer also has its own 2-second sleeps.
+
+---
+
+## 🐛 Troubleshooting
+
+### Common issues and solutions
+
+| Symptom | Likely cause | Solution |
+| :--- | :--- | :--- |
+| `Input directory not found: ...` | Script 1 has not run or `INPUT_DB_DIR` is wrong | Run Script 1 or fix the path |
+| `No .db files found in ...` | No chart database in the input directory | Run Script 1 |
+| `Table 'chart_data' not found` | Wrong `.db` selected (catalog/output DB in the input dir) | Keep only chart DBs in `INPUT_DB_DIR` |
+| `Missing columns in chart_data: {...}` | Old or corrupted Script 1 schema | Regenerate the chart DB with Script 1 |
+| `Song catalog not found at ...` | Script 2.2 has not run | Run Script 2.2; the pipeline continues with `NULL` IDs |
+| `Table 'artist_track' not found` | Wrong catalog database | Point `SONG_CATALOG_DB_PATH` to the correct DB |
+| `ModuleNotFoundError: No module named 'googleapiclient'` | API client not installed | `pip install google-api-python-client`; the pipeline falls back |
+| `ModuleNotFoundError: No module named 'isodate'` | Offline and auto-install failed | `pip install isodate` |
+| `yt-dlp failed: Sign in to confirm you're not a bot` | YouTube bot check | Update yt-dlp, use an API key, or accept Selenium fallback |
+| `Selenium error: Message: timeout` | Title selector not found | YouTube layout changed; update the selector or use API/yt-dlp |
+| `ChromeDriver` download failure | No network or incompatible Chrome | Install Chrome/driver manually or skip Selenium |
+| `UNIQUE constraint failed: enriched_songs.id` | Two chart rows matched the same catalog ID | Inspect duplicate songs; clean the chart or change the constraint |
+| `ZeroDivisionError` in the summary | `chart_data` has zero rows | Fix the input chart; the output table is empty |
+| `EOFError` at `input()` | Cron/non-TTY run without `GITHUB_ACTIONS` or API key | Set `GITHUB_ACTIONS=true` or provide the key |
+| Process hangs at “Continue anyway?” | Local run without an API key | Answer `y`, set the key, or use `GITHUB_ACTIONS=true` |
+| `database is locked` | Another process is writing the output DB | Stop the other process and retry |
+| `externally-managed-environment` | System Python blocks pip installs | Use a virtualenv |
+| All rows have `Unknown` / `Pop` | Catalog missing or exact-key mismatch | Run Script 2.2; compare raw artist/title strings |
+| `likes` and `comment_count` are `0` | API layer not used | Set `YOUTUBE_API_KEY`; comments are API-only |
+| `duration_ms` shows `3:47` | Column name is historical | It stores `m:ss`, not milliseconds |
+| `id` is `NULL` | No exact catalog match | Check `(artist_names, track_name)` formatting |
+| `error` is non-empty | All layers failed or returned invalid data | Read the joined message; try the API layer |
+| Output DB not updated | Permissions or wrong path | Check `OUTPUT_DIR` and file ownership |
+| `--help` starts the pipeline | There is no argument parser | Use `python -m compileall` for validation |
+
+### Debugging with logs
+
+The pipeline logs every phase to stdout. Locally:
+
+```bash
+python -m scripts.3_enrich_chart_data 2>&1 | tee enrich_run.log
+```
+
+In GitHub Actions, open the `🚀 Run enrichment` step and look for:
+
+1. The last `[ N/100]` progress line, which identifies the failing song.
+2. The `error` value in the output row.
+3. The layer names in the joined error (`API`, `yt-dlp`, `Selenium`).
+
+### Diagnosing the metadata layer
+
+The output does not store which layer succeeded. Infer it from the populated fields:
+
+| Observation | Likely layer |
+| :--- | :--- |
+| `comment_count > 0` or `audio_language != ''` | API |
+| `likes > 0` but no comments/audio | API or yt-dlp |
+| `region_restricted = 1` | API |
+| Basic duration/date/channel only | yt-dlp or Selenium |
+| All zeroes + `error` | All layers failed |
+
+### Inspecting the database
+
+```python
+import sqlite3
+
+conn = sqlite3.connect("charts_archive/3_enrich-chart-data/youtube_charts_2026-W48_enriched.db")
+cur = conn.cursor()
+
+print("integrity:", cur.execute("PRAGMA integrity_check").fetchone()[0])
+print("columns:", [r[1] for r in cur.execute("PRAGMA table_info(enriched_songs)")])
+print("rows:", cur.execute("SELECT COUNT(*) FROM enriched_songs").fetchone()[0])
+print("errors:", cur.execute(
+    "SELECT rank, track_name, error FROM enriched_songs WHERE error != ''"
+).fetchall())
+
+conn.close()
+```
+
+### Debug checklist
+
+- Does `INPUT_DB_DIR` contain exactly one latest chart DB (and no output/catalog DB)?
+- Does `chart_data` have the required columns?
+- Does `build_song.db` exist and contain `artist_track`?
+- Is `YOUTUBE_API_KEY` set and valid?
+- Is the API quota exhausted?
+- Is yt-dlp installed and current?
+- Is Chrome/ChromeDriver available if Selenium is needed?
+- Does the output DB exist after the run?
+- Is the `error` column populated for the failing rows?
+
+---
+
+## 📈 Monitoring and Maintenance
+
+### Health indicators
+
+| Indicator | Query | Healthy signal |
+| :--- | :--- | :--- |
+| Total rows | `SELECT COUNT(*) FROM enriched_songs;` | Equals the chart row count (normally 100) |
+| Catalog match rate | `id IS NOT NULL` | High and stable; investigate sudden drops |
+| Metadata error rate | `error != ''` | Low; investigate layer failures |
+| Unknown country | `artist_country = 'Unknown'` | Low; check catalog coverage |
+| Multi-country share | `artist_country = 'Multi-country'` | Expected for collaborations; watch spikes |
+| Distinct countries | `COUNT(DISTINCT artist_country)` | Grows as the chart becomes more global |
+| Distinct genres | `COUNT(DISTINCT macro_genre)` | Stable unless Script 2.2 changes taxonomy |
+| Duration completeness | `duration_s > 0` | High; zeroes indicate metadata failures |
+| Upload date completeness | `upload_date != ''` | High |
+| API-only fields | `comment_count > 0`, `audio_language != ''` | Present when the API layer is active |
+| Output size | File size | Grows slowly with row count |
+
+### Useful SQL
+
+```sql
+-- Row count and error rate
+SELECT
+  COUNT(*) AS total,
+  SUM(CASE WHEN error != '' THEN 1 ELSE 0 END) AS errors,
+  ROUND(100.0 * SUM(CASE WHEN error != '' THEN 1 ELSE 0 END) / COUNT(*), 2) AS error_pct
+FROM enriched_songs;
+
+-- Catalog match rate
+SELECT
+  SUM(CASE WHEN id IS NOT NULL THEN 1 ELSE 0 END) AS matched,
+  COUNT(*) AS total,
+  ROUND(100.0 * SUM(CASE WHEN id IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*), 2) AS match_pct
+FROM enriched_songs;
+
+-- Top countries
+SELECT artist_country, COUNT(*) AS songs
+FROM enriched_songs
+WHERE artist_country NOT IN ('Unknown', 'Multi-country')
+GROUP BY artist_country
+ORDER BY songs DESC
+LIMIT 10;
+
+-- Top genres
+SELECT macro_genre, COUNT(*) AS songs
+FROM enriched_songs
+WHERE macro_genre NOT IN ('Unknown', 'Multi-genre')
+GROUP BY macro_genre
+ORDER BY songs DESC
+LIMIT 10;
+
+-- Channel types
+SELECT channel_type, COUNT(*) AS songs
+FROM enriched_songs
+GROUP BY channel_type
+ORDER BY songs DESC;
+
+-- Video type distribution
+SELECT
+  SUM(is_official_video) AS official,
+  SUM(is_lyric_video) AS lyric,
+  SUM(is_live_performance) AS live,
+  SUM(is_collaboration) AS collaborations,
+  SUM(region_restricted) AS restricted
+FROM enriched_songs;
+
+-- Rows with metadata failures
+SELECT rank, track_name, artist_names, error
+FROM enriched_songs
+WHERE error != ''
+ORDER BY rank;
+
+-- Rows without a catalog match
+SELECT rank, track_name, artist_names
+FROM enriched_songs
+WHERE id IS NULL
+ORDER BY rank;
+
+-- Duration sanity
+SELECT MIN(duration_s), MAX(duration_s), AVG(duration_s)
+FROM enriched_songs
+WHERE duration_s > 0;
+```
+
+### Regular maintenance
+
+#### Weekly
+
+- Confirm the enriched DB was created for the expected week.
+- Check the total row count (normally 100).
+- Review the metadata error count and the catalog match rate.
+- Download the debug artifact after a failed workflow run; successful runs commit the DB instead.
+- Check API quota usage if the API layer is active.
+
+#### Monthly
+
+- Inspect rows with `id IS NULL` and compare their raw `(artist_names, track_name)` strings with the catalog.
+- Review the most common `error` messages.
+- Verify that yt-dlp still works; update it if bot checks appear.
+- Check that the Selenium selectors still match YouTube's layout (if Selenium is used).
+- Run `PRAGMA integrity_check` on the latest output DB.
+
+#### Quarterly
+
+- Review the detector keyword lists and channel categories against current chart data.
+- Check the output schema against downstream needs (Script 4).
+- Consider `VACUUM` if the output DB has grown significantly.
+- Review artifact retention (7 days) and repository size if the DB is committed.
+- Rotate the API key if it may have been exposed.
+
+#### Yearly
+
+- Revisit the three-layer order and the dependency set.
+- Consider adding a metadata cache to avoid re-fetching the same videos every week.
+- Review YouTube's terms of service and API quota policy.
+- Archive old enriched DBs if you keep more than a year.
+
+### Alerting ideas
+
+The process returns `0` on success and `1` on failure, so a wrapper can alert on non-zero exits:
+
+```bash
+#!/usr/bin/env bash
+set -u
+cd /home/alfonso/youtube-music-charts-intelligence
+GITHUB_ACTIONS=true .venv/bin/python -m scripts.3_enrich_chart_data >> logs/enrich.log 2>&1
+code=$?
+if [ "$code" -ne 0 ]; then
+  echo "chart enrichment failed with code $code" | \
+    mail -s "YouTube Charts: enrichment failure" you@example.com
+fi
+exit "$code"
+```
+
+For a richer signal, query the output DB after the run and alert when:
+
+- `COUNT(*)` is unexpectedly low.
+- `error != ''` exceeds a threshold (for example, 5% of rows).
+- `id IS NULL` exceeds a threshold.
+- `duration_s = 0` exceeds a threshold.
+
+---
+
+## 🔒 Security and Privacy
+
+### What is sensitive
+
+| Artifact | Why it matters | Handling |
+| :--- | :--- | :--- |
+| `YOUTUBE_API_KEY` | Grants access to the Data API and consumes quota | Environment/secret only; never commit or log |
+| Enriched SQLite DB | Contains public video metadata and chart data | Publishable, but respect YouTube's terms |
+| `error` strings | May contain URLs, exception text, or internal paths | Review before sharing publicly |
+| CI logs | May contain video URLs and titles | Public metadata, but review before sharing |
+| Runtime pip installs | Pull packages from PyPI during the run | Preinstall/pin in production |
+
+### Guidelines
+
+- **Never hardcode the API key.** Use `YOUTUBE_API_KEY` from the environment or a GitHub secret.
+- **Do not commit `.env` files.** Add them to `.gitignore`.
+- **Do not print the key.** The code does not log it; keep it that way.
+- **Review `error` values before publishing.** Exception messages can include local paths or full URLs.
+- **Pin dependencies in CI.** Runtime `pip install` and `pip install --upgrade yt-dlp` fetch whatever PyPI serves at that moment. For reproducible and safer builds, install pinned versions before the run.
+- **Understand `--no-sandbox`.** The Selenium layer uses it for CI compatibility. It reduces Chrome's process isolation; use it only in trusted environments.
+- **Respect YouTube's terms.** The code is MIT, but the data belongs to YouTube and the rights holders. Do not redistribute raw chart data commercially without permission.
+- **No AI data leaves the host.** There are no LLM calls, no prompts, no telemetry, and no AI API keys.
+- **The output DB is not encrypted.** It contains public metadata, not personal data, but treat it as project data.
+
+### Privacy notes
+
+- The pipeline stores chart track names, artist names, YouTube URLs, and public video statistics.
+- It does not store the raw YouTube title, description, or channel name; only the derived `channel_type`.
+- It does not store user identifiers, cookies, or account data.
+- Selenium runs headless and does not use a persistent profile; it does not log into YouTube.
+- yt-dlp and the API make direct requests to YouTube; your egress IP is visible to YouTube.
+
+---
+
+## 🧪 Testing and Validation
+
+### 1. Compile every module
+
+```bash
+python -m compileall -q scripts/3_enrich_chart_data
+```
+
+A non-zero exit code means a syntax error.
+
+### 2. Import smoke test
+
+Because the package name starts with a digit, use `importlib`:
+
+```bash
+python - <<'PY'
+import importlib
+
+pkg = importlib.import_module("scripts.3_enrich_chart_data")
+print("version:", pkg.__version__)
+print("fetch_video_metadata:", callable(pkg.fetch_video_metadata))
+
+for name in (
+    "scripts.3_enrich_chart_data.config",
+    "scripts.3_enrich_chart_data.metadata",
+    "scripts.3_enrich_chart_data.metadata.api",
+    "scripts.3_enrich_chart_data.metadata.detector",
+    "scripts.3_enrich_chart_data.metadata.selenium",
+    "scripts.3_enrich_chart_data.metadata.yt_dlp",
+    "scripts.3_enrich_chart_data.utils.db_utils",
+):
+    importlib.import_module(name)
+
+print("imports OK")
+PY
+```
+
+Importing `metadata.api` does not import `googleapiclient` until the function runs, so this smoke test works without the API client.
+
+### 3. Detector unit checks
+
+The detector is pure and needs no network:
+
+```bash
+python - <<'PY'
+import importlib
+
+d = importlib.import_module("scripts.3_enrich_chart_data.metadata.detector")
+
+assert d.detect_video_type("Song (Official Video)", "")["is_official_video"] is True
+assert d.detect_video_type("Song (Lyric Video)", "")["is_lyric_video"] is True
+assert d.detect_video_type("Song (Live)", "")["is_live_performance"] is True
+assert d.detect_video_type("Song (Remix)", "")["is_special_version"] is True
+
+assert d.detect_collaboration("A feat. B", "A, B") == {
+    "is_collaboration": True, "artist_count": 2
+}
+assert d.detect_collaboration("A", "A") == {
+    "is_collaboration": False, "artist_count": 1
+}
+
+assert d.detect_channel_type("ArtistVEVO")["channel_type"] == "VEVO"
+assert d.detect_channel_type("Artist - Topic")["channel_type"] == "Topic"
+assert d.detect_channel_type("Universal Music Group")["channel_type"] == "Label/Studio"
+assert d.detect_channel_type("Artist Official")["channel_type"] == "Artist Channel"
+assert d.detect_channel_type("Fan TV")["channel_type"] == "User Channel"
+assert d.detect_channel_type("Some Name")["channel_type"] == "General"
+
+assert d.parse_upload_season("2026-01-15")["upload_season"] == "Q1"
+assert d.parse_upload_season("2026-11-23")["upload_season"] == "Q4"
+assert d.parse_upload_season("")["upload_season"] == "unknown"
+
+assert d.detect_region_restrictions({"regionRestriction": {"blocked": ["US"]}}) == {
+    "region_restricted": True
+}
+
+print("detector checks passed")
+PY
+```
+
+### 4. Orchestrator invalid-URL check
+
+This exercises the pre-validation path without network access:
+
+```bash
+python - <<'PY'
+import importlib
+
+m = importlib.import_module("scripts.3_enrich_chart_data.metadata")
+out = m.fetch_video_metadata("", "Artist", None)
+
+assert out["Duration (s)"] == 0
+assert out["duration (m:s)"] == "0:00"
+assert out["error"].startswith("Invalid input")
+print(out["error"])
+PY
+```
+
+### 5. Database-layer test with temporary files
+
+This creates a fake chart DB and a fake catalog, then exercises the read and lookup functions:
+
+```bash
+python - <<'PY'
+import importlib
+import sqlite3
+import tempfile
+from pathlib import Path
+
+db_utils = importlib.import_module("scripts.3_enrich_chart_data.utils.db_utils")
+
+with tempfile.TemporaryDirectory() as tmp:
+    tmp = Path(tmp)
+
+    chart_db = tmp / "youtube_charts_2026-W48.db"
+    conn = sqlite3.connect(chart_db)
+    conn.execute("""
+        CREATE TABLE chart_data (
+            "Rank" INTEGER,
+            "Artist Names" TEXT,
+            "Track Name" TEXT,
+            "Periods on Chart" INTEGER,
+            "Views" INTEGER,
+            "YouTube URL" TEXT
+        )
+    """)
+    conn.execute("""
+        INSERT INTO chart_data VALUES
+        (1, 'Artist', 'Song', 3, 1000,
+         'https://www.youtube.com/watch?v=abcdefghijk')
+    """)
+    conn.commit()
+    conn.close()
+
+    catalog_db = tmp / "build_song.db"
+    conn = sqlite3.connect(catalog_db)
+    conn.execute("""
+        CREATE TABLE artist_track (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            artist_names TEXT,
+            track_name TEXT,
+            artist_country TEXT,
+            macro_genre TEXT,
+            artists_found TEXT
+        )
+    """)
+    conn.execute("""
+        INSERT INTO artist_track
+        (artist_names, track_name, artist_country, macro_genre, artists_found)
+        VALUES ('Artist', 'Song', 'Chile', 'Pop', '1/1')
+    """)
+    conn.commit()
+    conn.close()
+
+    db_utils.INPUT_DB_DIR = tmp
+    db_utils.SONG_CATALOG_DB_PATH = catalog_db
+
+    latest = db_utils.find_latest_chart_db()
+    songs = db_utils.load_chart_songs(latest)
+    lookup = db_utils.load_song_catalog_lookup()
+
+    assert latest.name == "youtube_charts_2026-W48.db"
+    assert songs[0]["Track Name"] == "Song"
+    assert lookup[("Artist", "Song")] == (1, "Chile", "Pop", "1/1")
+
+    print("database-layer checks passed")
+PY
+```
+
+> The test monkeypatches `INPUT_DB_DIR` and `SONG_CATALOG_DB_PATH` inside `db_utils`. That works because the functions resolve those names from the module's global namespace.
+
+### 6. Output schema test
+
+```bash
+python - <<'PY'
+import importlib
+import sqlite3
+
+db_utils = importlib.import_module("scripts.3_enrich_chart_data.utils.db_utils")
+
+conn = sqlite3.connect(":memory:")
+db_utils.create_output_table(conn)
+
+columns = [row[1] for row in conn.execute("PRAGMA table_info(enriched_songs)")]
+assert "rank" in columns
+assert "id" in columns
+assert "error" in columns
+assert "processed_at" in columns
+assert len(columns) == 26
+
+indexes = [row[1] for row in conn.execute("PRAGMA index_list(enriched_songs)")]
+assert "idx_country" in indexes
+assert "idx_genre" in indexes
+assert "idx_upload_date" in indexes
+assert "idx_error" in indexes
+
+print("schema checks passed:", len(columns), "columns")
+conn.close()
+PY
+```
+
+### 7. Idempotency test
+
+```bash
+python - <<'PY'
+import importlib
+import sqlite3
+
+db_utils = importlib.import_module("scripts.3_enrich_chart_data.utils.db_utils")
+
+conn = sqlite3.connect(":memory:")
+db_utils.create_output_table(conn)
+db_utils.create_output_table(conn)  # second run must not fail
+
+count = conn.execute("SELECT COUNT(*) FROM enriched_songs").fetchone()[0]
+assert count == 0
+print("idempotent schema recreation passed")
+conn.close()
+PY
+```
+
+For a full end-to-end idempotency test, run the pipeline twice on the same chart and compare `COUNT(*)` and the set of `(rank, artist_names, track_name)` pairs. The metadata values may differ, but the row set should not.
+
+### 8. Proposed pytest layout
+
+If you add an automated suite, keep the pure and database layers first:
+
+```text
+tests/
+├── test_detector.py          # video type, collaboration, channel, season, region
+├── test_metadata_schema.py   # _empty_metadata, _is_valid_result
+├── test_db_utils.py          # find/latest, load_chart_songs, catalog lookup
+├── test_output_schema.py     # create_output_table, insert_enriched_row
+└── test_pipeline.py          # main() with monkeypatched metadata
+```
+
+Use `importlib.import_module("scripts.3_enrich_chart_data...")` because the package name starts with a digit. For `test_pipeline.py`, monkeypatch `__main__.fetch_video_metadata` to avoid network calls.
+
+### 9. CI dry run
+
+1. Push a branch.
+2. Open **Actions → 3 - Enrich Chart Data → Run workflow**.
+3. Select the branch and run.
+4. Inspect the `🚀 Run enrichment` step.
+5. If the run fails, download the `enrich-debug-*` artifact (7-day retention). On success, pull the committed DB from the branch.
+6. Confirm the row and error counts in the `📋 Final report` step, or open the DB locally.
+
+---
+
+## ❓ FAQ
+
+### Does this stage use AI?
+
+**No.** There are no LLM calls, no prompts, no model names, and no AI API keys. The classification is regex and keyword based.
+
+### Is a YouTube API key required?
+
+**No.** Without a key, Layer 1 is skipped and the pipeline uses yt-dlp, then Selenium. A key is strongly recommended because it is faster and provides comments, audio language, and region restrictions.
+
+### Why is the banner order “API → Selenium → yt-dlp”?
+
+It is a cosmetic bug. The actual order is **API → yt-dlp → Selenium**. Trust the code and the logs, not the banner.
+
+### Why does Selenium run last?
+
+Selenium is the slowest and most fragile layer. yt-dlp is faster and lighter, and the API is faster and more complete. Selenium is the last resort.
+
+### Why does the script install packages at runtime?
+
+For convenience on a fresh machine. It is not ideal for production or CI: runtime installs are slow, unpinned, and can fail under PEP 668. Preinstall dependencies and remove the per-call yt-dlp upgrade for reproducible runs.
+
+### Why is `google-api-python-client` not auto-installed?
+
+The code auto-installs only `isodate` in the API layer. `googleapiclient` must be installed separately. If it is missing, the API layer fails and the pipeline falls back to yt-dlp.
+
+### Why are `likes` and `comment_count` zero?
+
+Only the API layer reliably provides comments. yt-dlp may provide likes; Selenium provides neither. Set `YOUTUBE_API_KEY` to get the full set.
+
+### Why is `duration_ms` showing `3:47`?
+
+The column name is historical. It stores a human-readable `"m:ss"` string, not milliseconds. Use `duration_s` for numeric calculations.
+
+### Why is `id` NULL?
+
+The exact `(artist_names, track_name)` pair was not found in the Script 2.2 catalog. The lookup does not normalize case, punctuation, or whitespace. Compare the raw strings in both databases.
+
+### Why does a song that exists in the catalog not match?
+
+Common causes:
+
+- Different whitespace or punctuation.
+- Different capitalization.
+- A collaboration string formatted differently (`"A & B"` vs `"A, B"`).
+- The catalog was built from a different chart week.
+- The catalog contains the song under a slightly different title.
+
+The lookup is intentionally exact; fuzzy matching would risk false positives.
+
+### Can I process an older week?
+
+Not directly. The pipeline always selects the lexicographically latest `.db`. Isolate the desired database or add a `--week` option.
+
+### Can I limit the run to a few songs?
+
+Not without editing the code. Add a `--limit` argument or slice the `songs` list in `__main__.py`.
+
+### Does it modify Script 1 or Script 2.2 data?
+
+No. It issues only `SELECT` statements. However, the connections are opened read-write, so the read-only guarantee is behavioral rather than enforced by SQLite.
+
+### Is the output idempotent?
+
+The table is dropped and recreated on every run, so the row set is stable. Metadata values and `processed_at` can change between runs. The output is idempotent in shape, not byte-identical.
+
+### Why does it re-fetch metadata every run?
+
+There is no cache or checkpoint. This keeps the data fresh but consumes API quota and time. A metadata cache keyed by video ID is a good future improvement.
+
+### Can I run it on Windows?
+
+The Python code is cross-platform, but the documented deployment targets Linux and GitHub Actions. Selenium/Chrome paths and the shell examples assume Linux.
+
+### Does it need Chrome?
+
+Only for the Selenium layer. The API and yt-dlp layers do not need a browser.
+
+### What happens if the catalog is missing?
+
+The pipeline logs warnings and continues with `id = NULL`, `artist_country = 'Unknown'`, `macro_genre = 'Pop'`, and `artists_found = '0/0'`. The chart rows are preserved.
+
+### What happens if the chart has zero rows?
+
+Phase 7 divides by `total` and raises `ZeroDivisionError`. The output table is empty and the process exits `1`.
+
+### Why does the pipeline hang in cron?
+
+It is waiting at `input()` because the run is local (not `GITHUB_ACTIONS=true`) and no API key is set. Set `GITHUB_ACTIONS=true` or provide the key.
+
+### Why is `is_official_video` true for an “unofficial” video?
+
+The check is substring-based: `"official"` is contained in `"unofficial"`. Treat the flag as a heuristic.
+
+### Why is `is_live_performance` true for a studio track?
+
+The word `"live"` can appear inside other words such as `"delivery"`, and `"show"` can appear in unrelated contexts. The heuristic is intentionally simple.
+
+### Which layer succeeded for a given row?
+
+The output does not store layer provenance. Infer it from the fields: comments/audio/region imply API; likes imply API or yt-dlp; basic fields only imply yt-dlp or Selenium.
+
+### Can I run this in GitHub Actions?
+
+Yes. The repository workflow `.github/workflows/3_enrich-chart-data.yml` does exactly that: it sets `GITHUB_ACTIONS=true`, passes `YOUTUBE_API_KEY` from secrets, installs dependencies, and allows 60 minutes. See [CI/CD integration](#-cicd-integration).
+
+### Is the enriched database committed to Git?
+
+The workflow commits it because it is a derived artifact that downstream stages consume. An artifact-only policy is also valid and avoids repository bloat, but the current workflow uploads an artifact only on failure.
+
+### Is the data licensed for redistribution?
+
+The code is MIT. The data belongs to YouTube and the rights holders. Review YouTube's terms before redistributing raw chart data commercially.
+
+---
+
+## 🧱 Known Limitations and Future Improvements
+
+### Current limitations
+
+1. **Python version mismatch in the docstrings.** Several modules say Python 3.7+, but `__main__.py` uses `int | None`, which requires **Python 3.10+**. Use 3.10+.
+2. **Banner order is wrong.** The console banner says `API → Selenium → yt-dlp`; the real order is `API → yt-dlp → Selenium`.
+3. **Selenium docstring is wrong.** `metadata/selenium.py` calls itself Layer 2 and says it runs before yt-dlp; it is actually Layer 3 and runs after yt-dlp.
+4. **Orchestrator docstring typo.** The notes say a layer succeeds with a non-empty `error`; the code requires an empty `error`.
+5. **API dependency not auto-installed.** The API docstring implies `googleapiclient` is auto-installed; only `isodate` is. Missing `googleapiclient` silently disables Layer 1.
+6. **Runtime pip installs.** yt-dlp, isodate, selenium, and webdriver-manager can be installed during the run. This is slow, unpinned, and can fail under PEP 668 or offline conditions.
+7. **yt-dlp is upgraded on every song.** `pip install --upgrade yt-dlp` runs inside the per-song function. For 100 songs, this can dominate the runtime and generate unnecessary network traffic.
+8. **No CLI flags.** There is no `--week`, `--limit`, `--dry-run`, `--force`, `--no-selenium`, or `--help`. Behavior is environment-driven or requires code edits.
+9. **Latest-DB selection is broad.** `find_latest_chart_db()` sorts every `.db` in `INPUT_DB_DIR`, without a filename pattern. A misplaced catalog or output DB can be selected.
+10. **Exact catalog join only.** The lookup does not normalize case, whitespace, punctuation, or Unicode. Songs that differ slightly from the catalog are treated as unmatched.
+11. **`id` UNIQUE can abort the run.** Two chart rows that resolve to the same catalog ID cause `sqlite3.IntegrityError` on the second insert.
+12. **The foreign key is not enforced.** `FOREIGN KEY (id) REFERENCES artist_track(id)` is declarative only; the referenced table is in another database and SQLite foreign keys are off by default.
+13. **Per-row commits.** Each insert commits individually. This is safe but slower than a batch transaction.
+14. **No layer provenance.** The output does not record whether metadata came from the API, yt-dlp, or Selenium. Diagnosis relies on field inference.
+15. **No pipeline-level retries.** A transient API or network failure is recorded in `error`; there is no retry with backoff at the orchestration level. yt-dlp has internal retries; the API and Selenium do not.
+16. **No API quota handling.** Quota errors are treated as generic API errors. There is no preflight quota check or backoff.
+17. **`duration_ms` is misnamed.** It stores `"m:ss"` text, not milliseconds.
+18. **`is_special_version` is detected but not stored.** The output schema has no column for it.
+19. **`detect_region_restrictions()` is unused.** The API layer duplicates the logic inline; the helper is dead code.
+20. **Substring heuristics produce false positives.** `"official"` matches `"unofficial"`, `"live"` matches `"delivery"`, and so on.
+21. **`artist_count` is delimiter-based.** It counts `&` and `,`, not actual artists, and caps at 10.
+22. **`find_latest_chart_db()` assumes zero-padded weeks.** `2026-W9` would sort above `2026-W10` lexicographically.
+23. **Interactive prompt in non-TTY environments.** Without `GITHUB_ACTIONS=true` or an API key, cron runs raise `EOFError`.
+24. **Zero-row chart divides by zero.** The summary assumes `total > 0`.
+25. **Inputs are not opened read-only.** The code only selects, but the connections are read-write.
+26. **Synthetic chart rows are not filtered.** `is_synthetic = 1` rows from Script 1 can enter the output.
+27. **No `week_id` column.** The week is only in the output filename.
+28. **Output is a projection.** `Previous Rank`, `Views Raw`, `Growth`, and Script 1 ingestion metadata are dropped.
+29. **No metadata cache.** The same video is re-fetched every week.
+30. **No automated test suite.** The pure and database layers are testable, but tests are not checked in.
+31. **No file logging.** Logs go to stdout only; the operator must redirect them.
+32. **No schema versioning.** The table is dropped and recreated, so there is no migration history.
+33. **No process lock.** Two concurrent runs can conflict on the same output database.
+34. **Selenium selectors are stale-prone.** The title and channel selectors target older YouTube layouts.
+35. **Selenium requires network for ChromeDriver.** `webdriver-manager` downloads the driver at runtime.
+36. **`likes` can be NULL with yt-dlp.** The field is `info.get("like_count", 0)`, which returns `None` if the key exists with a null value.
+37. **`error` can be very long.** The joined message may include full exception text.
+38. **`Pop` is used as the unmatched genre default.** This inflates the `Pop` count and is indistinguishable from a real `Pop` classification.
+39. **No `--all-weeks` backfill.** Only the latest chart is processed.
+40. **No data-quality gate.** The pipeline writes whatever it retrieves, even if the metadata error rate is high.
+
+### Edge cases
+
+| Case | Current behavior | Possible improvement |
+| :--- | :--- | :--- |
+| Chart has 0 rows | `ZeroDivisionError` in summary | Guard the division; exit with a clear message |
+| Chart has duplicate ranks | First `rowid` per rank wins | Keep the newest row or log the conflict |
+| Chart has duplicate songs with different ranks | Second insert can fail on `id UNIQUE` | Use `INSERT OR IGNORE` or drop the constraint |
+| Catalog missing | Warns; `NULL`/`Unknown`/`Pop`/`0/0` | Fail fast or require a catalog flag |
+| Catalog has duplicate keys | Last row wins in the dict | Add a unique index in Script 2.2 |
+| `YouTube URL` is empty | `fetch_video_metadata` returns an error; row is written | Skip metadata or mark the row |
+| `Track Name` is `NULL` | `song["Track Name"][:30]` raises `TypeError` | Validate required values before slicing |
+| API key invalid | API error; yt-dlp/Selenium fallback | Validate the key at startup |
+| API quota exhausted | API error; yt-dlp/Selenium fallback | Preflight quota or backoff |
+| yt-dlp bot check | All clients fail; Selenium fallback | Update yt-dlp; use API |
+| Selenium title selector missing | Layer fails; row has zeroed metadata | Update selector; use API/yt-dlp |
+| ChromeDriver download fails | Layer fails; row has zeroed metadata | Preinstall the driver |
+| Output DB is read-only | `sqlite3.OperationalError` | Check permissions |
+| Two runs overlap | No lock; possible conflict | Add a process lock |
+| Week 53 | Filename handles it; lexicographic sort works if zero-padded | No action needed |
+| Non-padded week (`2026-W9`) | Sorts above `2026-W10` | Normalize or parse the week |
+| Synthetic chart rows | Enriched like real rows | Filter `is_synthetic` |
+| Long error text | Stored verbatim | Truncate or store a structured error |
+| `like_count` is `None` | Stored as `NULL` | Coerce to `0` |
+| Video duration is 0 | All layers rejected; zeroed metadata | Allow zero-duration rows explicitly |
+
+### Future improvements
+
+- **Add a proper CLI:** `--week`, `--limit`, `--dry-run`, `--force`, `--no-selenium`, `--layer`, `--output`.
+- **Preflight dependency check:** verify `googleapiclient`, `isodate`, `yt_dlp`, `selenium`, Chrome, and ChromeDriver before the loop.
+- **Pin dependencies:** pin every entry in the repository-level `requirements.txt`; `yt-dlp` is currently unpinned.
+- **Remove per-call pip upgrades:** update yt-dlp once at startup or rely on the pinned version.
+- **Add a metadata cache:** key by video ID; avoid re-fetching the same video across weeks.
+- **Add layer provenance:** `metadata_source` column with `api`, `ytdlp`, or `selenium`.
+- **Add `is_special_version`:** store the flag that the detector already computes.
+- **Add `week_id`:** persist the chart week in the table, not only in the filename.
+- **Add `is_synthetic`:** propagate Script 1's flag to the output.
+- **Filter synthetic rows:** optionally skip `is_synthetic = 1`.
+- **Normalize catalog matching:** trim, casefold, and collapse whitespace; optionally add a fuzzy match with a confidence score.
+- **Handle duplicate catalog IDs:** `INSERT OR IGNORE`, or allow duplicate IDs if the output is per chart row.
+- **Enable foreign keys or remove the clause:** the current FK is misleading.
+- **Use a batch transaction:** commit once per run, with a configurable batch size.
+- **Add retries and backoff:** per layer, with jitter and a maximum attempt count.
+- **Add API quota monitoring:** read quota errors and back off or switch layers.
+- **Add rate limiting:** configurable delay per layer.
+- **Add structured logging:** JSON lines for CI and dashboards.
+- **Add file logging:** optional rotating file handler.
+- **Add a process lock:** prevent concurrent runs on the same output DB.
+- **Add schema versioning:** a `schema_version` table or `PRAGMA user_version`.
+- **Add data-quality gates:** fail or warn when error/unknown rates exceed thresholds.
+- **Add a `--all-weeks` backfill:** process every chart DB in order.
+- **Add tests:** `pytest` for detector, schema, DB utils, and pipeline orchestration.
+- **Add a healthcheck command:** verify inputs, dependencies, API key, and output.
+- **Harden the existing workflow:** add a concurrency group, deterministic retention by chart week, an optional success artifact, and a pinned dependency install.
+- **Add a Docker image:** optional, with Chrome and pinned dependencies; document the limitations.
+- **Add a JSON export:** for downstream tools that do not read SQLite.
+- **Add a week-over-week diff:** new entries, dropouts, metadata changes.
+
+---
+
+## 📊 Performance Reference
+
+### Typical run
+
+| Scenario | Approximate time | Notes |
+| :--- | :--- | :--- |
+| API, 100 songs | 1–3 minutes | Network latency + 0.1 s/song |
+| yt-dlp, 100 songs | 5–15 minutes | Client rotation, 2 s sleeps, per-call pip upgrade |
+| Selenium, 100 songs | 10–25 minutes | ~5–10 s per video + driver startup |
+| Mixed (API + fallbacks) | 3–15 minutes | Depends on failure rate |
+| Database read/write | < 1 second | 100 rows, small schema |
+| Summary queries | < 1 second | Indexed aggregates |
+
+These are estimates, not guarantees. Network conditions, YouTube throttling, API quota, and the per-call yt-dlp upgrade can change them significantly.
+
+### Output size
+
+| Item | Typical size |
+| :--- | :--- |
+| Enriched DB, 100 rows | ~50–150 KB |
+| 10 enriched DBs, 100 rows each | ~0.5–1.5 MB total |
+| Indexes | A few KB per index |
+| SQLite journal/WAL | Transient |
+
+### Complexity
+
+| Operation | Complexity | Notes |
+| :--- | :--- | :--- |
+| Find latest DB | O(F) | `F` files in the input directory |
+| Load chart rows | O(C) | `C` chart rows (~100) |
+| Load catalog | O(A) | `A` catalog rows (hundreds to thousands) |
+| Per-song metadata | O(L) | `L` layers attempted (1–3) |
+| Catalog lookup | O(1) | Dictionary access |
+| Insert | O(1) per row | Plus commit overhead |
+| Summary | O(C) | Several aggregate scans |
+
+### Bottlenecks
+
+1. **yt-dlp pip upgrade per song.** The dominant cost in yt-dlp runs. Remove it or move it to startup.
+2. **Network latency.** Each layer makes at least one request per song.
+3. **yt-dlp sleeps.** `sleep_interval` and `sleep_interval_requests` add 2 seconds per request.
+4. **Selenium page load and selector waits.** Up to 10 seconds for the title, plus driver startup.
+5. **Per-row commits.** 100 commits are fine; 10,000 would be slow.
+6. **API quota.** Not a speed bottleneck, but a hard limit on repeated runs.
+7. **Runtime pip installs.** The first run may spend tens of seconds installing packages.
+
+### Optimization tips
+
+1. **Use the API layer.** It is the fastest and most complete path.
+2. **Preinstall and pin dependencies.** Avoid runtime installs and per-call upgrades.
+3. **Remove the per-call yt-dlp upgrade.** Update yt-dlp at startup or in the deployment step.
+4. **Add a metadata cache.** Key by video ID; skip unchanged videos across weeks.
+5. **Batch commits.** Use one transaction for the whole run or commit every N rows.
+6. **Add a `--limit` option.** Test with 5–10 songs before a full run.
+7. **Run during off-peak hours.** YouTube throttling is less likely.
+8. **Monitor API quota.** Avoid overlapping jobs that share the same key.
+9. **Use an SSD.** SQLite and browser caches benefit.
+10. **Avoid concurrent runs.** There is no lock; two runs can corrupt each other's output.
+
+---
+
+## 📄 License and Attribution
+
+### License
+
+MIT License. See the repository's [`LICENSE`](https://github.com/adroguetth/youtube-music-charts-intelligence/blob/main/LICENSE) file.
+
+### Author
+
+**Alfonso Droguett**
+
+- Repository: [adroguetth/youtube-music-charts-intelligence](https://github.com/adroguetth/youtube-music-charts-intelligence)
+- Email: [adroguett.consultor@gmail.com](mailto:adroguett.consultor@gmail.com)
+
+### External data sources
+
+| Source | Producer | Use in this stage |
+| :--- | :--- | :--- |
+| YouTube Charts weekly ranking | Script 1 | `chart_data`: rank, artist, title, periods, views, URL |
+| Artist country + macro-genre catalog | Script 2.2 | `artist_track`: id, country, genre, artists_found |
+| YouTube video metadata | YouTube Data API v3 / yt-dlp / Selenium | Duration, date, likes, comments, language, channel, flags |
+
+### Key dependencies
+
+| Dependency | License | Purpose |
+| :--- | :--- | :--- |
+| `google-api-python-client` | Apache 2.0 | YouTube Data API v3 client |
+| `isodate` | BSD-3-Clause | ISO 8601 duration parsing |
+| `yt-dlp` | Unlicense | Video metadata extraction |
+| `selenium` | Apache 2.0 | Browser automation |
+| `webdriver-manager` | Apache 2.0 | ChromeDriver management |
+| **Google Chrome / Chromium** | Proprietary / BSD-style | Selenium browser |
+| `sqlite3` | Public domain (Python stdlib) | Local database storage |
+| `logging`, `pathlib`, `subprocess`, `sys`, `re`, `datetime` | Python Software Foundation License | Standard library |
+
+### Data license
+
+The **code** is MIT. The **generated data** is derived from YouTube Charts and YouTube video metadata, and remains subject to YouTube's terms:
+
+- **Attribution:** if you publish analyses, attribute YouTube Charts as the source.
+- **Commercial use:** check YouTube's terms before redistributing raw chart data commercially.
+- **Personal use:** this project is designed for personal analytics and research.
+- **No warranty:** the pipeline is provided as-is; YouTube's API, page layout, and access policy can change without notice.
+
+---
+
+## 🤝 Contribution
+
+### How to contribute
+
+Contributions that improve reliability, coverage, or maintainability are welcome.
+
+- **Report issues** with the full log, the failing row, the layer error, the Python version, and whether an API key was used.
+- **Propose metadata improvements** with examples of the title/description that produced a wrong classification.
+- **Add tests** for the detector, schema, database layer, and pipeline.
+- **Improve dependency handling** by pinning versions and removing runtime installs.
+- **Add a CLI** with `--week`, `--limit`, `--dry-run`, and `--force`.
+- **Preserve the output schema** or document any change that downstream stages must follow.
+- **Keep the code and documentation in English.**
+
+### Quick contribution guide
+
+```bash
+# 1. Fork and clone
+git clone https://github.com/<your-user>/youtube-music-charts-intelligence.git
+cd youtube-music-charts-intelligence
+
+# 2. Create a branch
+git checkout -b feature/add-metadata-source
+
+# 3. Make the change
+#    - keep the module header block
+#    - keep the section banners
+#    - keep NumPy-style docstrings
+#    - keep logs and docs in English
+
+# 4. Validate
+python -m compileall -q scripts/3_enrich_chart_data
+python - <<'PY'
+import importlib
+pkg = importlib.import_module("scripts.3_enrich_chart_data")
+print(pkg.__version__)
+PY
+
+# 5. Commit and push
+git add scripts/3_enrich_chart_data/
+git commit -m "Add metadata source provenance"
+git push origin feature/add-metadata-source
+```
+
+### Code conventions
+
+- One responsibility per module.
+- Pure functions in `metadata/detector.py` (no I/O).
+- SQL only in `utils/db_utils.py`.
+- Metadata retrieval only in `metadata/`.
+- Logs and documentation in English.
+- Keep the module header and section banners consistent with the rest of the repository.
+- Do not hardcode API keys or commit `.env` files.
+- Prefer pinned dependencies over runtime pip installs.
+
+### Priority contribution areas
+
+1. **Dependency hygiene:** pin the unpinned entries in `requirements.txt` and remove the per-call yt-dlp upgrade.
+2. **CLI:** add `--week`, `--limit`, `--dry-run`, and `--force`.
+3. **Layer provenance:** store `metadata_source` in the output.
+4. **Catalog matching:** add normalized matching with an explicit confidence score.
+5. **Duplicate handling:** resolve the `id UNIQUE` edge case.
+6. **Tests:** add `pytest` coverage for the detector, schema, DB utils, and pipeline.
+7. **Data quality:** add an `is_synthetic` filter and a metadata error threshold.
+8. **Performance:** add a metadata cache and batch commits.
+9. **CI:** harden the existing workflow with concurrency control, deterministic retention, and pinned installs.
+10. **Documentation:** keep this README aligned with the code, especially the layer order and schema.
+
+---
+
+*Documentation for Script 3 — Chart Data Enrichment. Last updated: 2026-11-26.*
 
 
